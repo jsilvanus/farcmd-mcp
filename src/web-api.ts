@@ -73,7 +73,7 @@ export async function mountWebApi(app:FastifyInstance, users:UserStore, sessionS
     if(!name||name.length>120)return reply.code(400).send({error:'Invalid key name'});
     let encryptedPrivateKey=current.encryptedPrivateKey; let fingerprint=current.fingerprint;
     if(privateKey!==undefined){ const inspected=inspectPrivateKey(privateKey); if(!inspected.valid)return reply.code(400).send({error:'The uploaded value is not a supported SSH private key'}); encryptedPrivateKey=encryptSecret(privateKey,'ssh-key:'+user.id+':'+id); fingerprint=inspected.fingerprint; lockSshKey(user.id,id); }
-    ssh.updateKey({...current,name,encryptedPrivateKey,...(fingerprint?{fingerprint}:{fingerprint:undefined}),updatedAt:Date.now()}); return {key:ssh.getKey(user.id,id)};
+    ssh.updateKey({...current,name,encryptedPrivateKey,...(fingerprint ? {fingerprint} : {}),updatedAt:Date.now()}); return {key:ssh.getKey(user.id,id)};
   });
   app.post('/api/ssh/keys/:id/unlock',async (request,reply)=>{
     const user=await requireUser(request,reply,users,sessions); if(!user)return;
@@ -93,7 +93,7 @@ export async function mountWebApi(app:FastifyInstance, users:UserStore, sessionS
   });
   app.patch('/api/ssh/targets/:id',async (request,reply)=>{
     const user=await requireUser(request,reply,users,sessions); if(!user)return; const id=(request.params as {id:string}).id; const current=ssh.getTarget(user.id,id); if(!current)return reply.code(404).send({error:'SSH target not found'}); const b=request.body as Record<string,unknown>;
-    const next={...current,name:typeof b.name==='string'?b.name.trim():current.name,hostname:typeof b.hostname==='string'?b.hostname.trim():current.hostname,username:typeof b.username==='string'?b.username.trim():current.username,port:b.port===undefined?current.port:Number(b.port),sshKeyId:typeof b.sshKeyId==='string'?b.sshKeyId:current.sshKeyId,hostFingerprint:typeof b.hostFingerprint==='string'?b.hostFingerprint.trim():(b.hostFingerprint===null?undefined:current.hostFingerprint),enabled:typeof b.enabled==='boolean'?b.enabled:current.enabled,updatedAt:Date.now()};
+    const base={...current,name:typeof b.name==='string'?b.name.trim():current.name,hostname:typeof b.hostname==='string'?b.hostname.trim():current.hostname,username:typeof b.username==='string'?b.username.trim():current.username,port:b.port===undefined?current.port:Number(b.port),sshKeyId:typeof b.sshKeyId==='string'?b.sshKeyId:current.sshKeyId,enabled:typeof b.enabled==='boolean'?b.enabled:current.enabled,updatedAt:Date.now()}; const next = b.hostFingerprint===null ? base : {...base,...(typeof b.hostFingerprint==='string'?{hostFingerprint:b.hostFingerprint.trim()}:current.hostFingerprint?{hostFingerprint:current.hostFingerprint}:{})};
     if(!next.name||!next.hostname||!next.username||!Number.isInteger(next.port)||next.port<1||next.port>65535||!ssh.getKey(user.id,next.sshKeyId)) return reply.code(400).send({error:'Invalid SSH target data'}); ssh.updateTarget(next); return {target:ssh.getTarget(user.id,id)};
   });
   app.delete('/api/ssh/targets/:id',async (request,reply)=>{ const user=await requireUser(request,reply,users,sessions); if(!user)return; const id=(request.params as {id:string}).id; if(!ssh.getTarget(user.id,id))return reply.code(404).send({error:'SSH target not found'}); ssh.deleteTarget(user.id,id); return {ok:true}; });
