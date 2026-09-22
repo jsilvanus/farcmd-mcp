@@ -46,7 +46,7 @@ await app.register(cookie);
 await mountWebApi(app, users, store);
 if (process.env.NODE_ENV === 'production') {
   await app.register(fastifyStatic, { root: join(process.cwd(), 'dist/web'), prefix: '/' });
-  app.get('/', async (_request, reply) => reply.sendFile('index.html'));
+  
 }
 
 await mountOAuthMetadata(app, publicUrl);
@@ -59,6 +59,9 @@ await mountMcpHttp(app, {
 });
 
 app.get('/health', async () => ({ok:true}));
-app.get('/', async () => ({name:'farcmd-mcp',version:'0.1.0',mcp:'/mcp'}));
+app.get('/', async (_request, reply) => {
+  if (process.env.NODE_ENV === 'production') return reply.sendFile('index.html');
+  return {name:'farcmd-mcp',version:'0.2.0',mcp:'/mcp',web:'/'};
+});
 
 await app.listen({host:process.env.HOST ?? '0.0.0.0',port});
