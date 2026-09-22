@@ -83,3 +83,16 @@ Users can create an account, sign in, sign out, and update their name/email. Bro
 Mutating browser API requests validate the `Origin` header when present. Login and registration have a basic per-IP rate limit. This is intentionally a baseline; Phase 8 will add full CSRF strategy, stronger abuse controls, security event logging, and operational hardening.
 
 The Phase 1 development bootstrap account remains optional: set `MCP_DEFAULT_USER_PASSWORD` to create it. Omitting that variable is now valid when using normal account registration.
+
+
+## Phase 3 configuration
+
+SSH private keys are encrypted at rest with AES-256-GCM. Set `FARCMD_ENCRYPTION_KEY` to a base64-encoded random 32-byte key before starting the server:
+
+```sh
+openssl rand -base64 32
+```
+
+The SSH private-key passphrase, when one exists, is never persisted by farcmd-mcp. The web UI unlocks a key for a short in-memory session (15 minutes), after which the passphrase must be entered again. Host fingerprints are verified during connection tests; an unknown host is not silently trusted.
+
+Never commit `FARCMD_ENCRYPTION_KEY`, SSH private keys, or passphrases.
