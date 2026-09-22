@@ -52,15 +52,15 @@ export class FarcmdConnectorImpl implements FarcmdConnector {
     return this.executeStoredCommand(context.userId,context.clientId,commandId,command.level);
   }
   async approvePending(userId:string,token:string,password?:string):Promise<CommandExecution>{
-    const p=this.pending.get(token); if(!p||p.userId!==userId)throw new Error('Confirmation request not found or expired.');
+    const p=this.pending.get(token); if(!p||p.userId!==userId)throw new Error('Confirmation request not found or expired.');\n    const audit=(event:string,details?:unknown)=>{try{this.db.prepare('INSERT INTO security_events (id,user_id,client_id,event,details,created_at) VALUES (?,?,?,?,?,?)').run(crypto.randomUUID(),userId,p.clientId,event,details===undefined?null:JSON.stringify(details),Date.now());}catch{}};\n    audit('confirmation_attempt',{commandId:p.commandId,level:p.level});
     const grant=this.grants.get(p.userId,p.clientId); if(!grant||grant.revokedAt||!grant.visibleLevels.includes(p.level))throw new Error('The OAuth authorization is no longer permitted.');
     const command=this.commands.get(p.userId,p.commandId); if(!command||!command.enabled||command.level!==p.level)throw new Error('The command is no longer available.');
     const confirmation=confirmationForLevel(p.level);
     if(confirmation==='password'){
       if(!password)throw new Error('Execution password required.');
-      if(!await this.commands.verifyExecutionPassword(userId,p.commandId,password))throw new Error('Invalid execution password.');
+      if(!await this.commands.verifyExecutionPassword(userId,p.commandId,password)){audit('level5_password_failed',{commandId:p.commandId});throw new Error('Invalid execution password.');}\n      audit('level5_password_accepted',{commandId:p.commandId});
     }
-    const result=await this.executeStoredCommand(p.userId,p.clientId,p.commandId,p.level); this.pending.complete(token,{exitCode:result.exitCode,stdout:result.stdout,stderr:result.stderr,durationMs:result.durationMs,...(result.signal?{signal:result.signal}:{})}); return result;
+    const result=await this.executeStoredCommand(p.userId,p.clientId,p.commandId,p.level); audit('confirmation_executed',{commandId:p.commandId,level:p.level}); this.pending.complete(token,{exitCode:result.exitCode,stdout:result.stdout,stderr:result.stderr,durationMs:result.durationMs,...(result.signal?{signal:result.signal}:{})}); return result;
   }
   private async executeStoredCommand(userId:string,clientId:string,commandId:string,level:CommandLevel):Promise<CommandExecution>{
     const command=this.commands.get(userId,commandId); if(!command||!command.enabled||command.level!==level)throw new Error('Command is no longer available.');
