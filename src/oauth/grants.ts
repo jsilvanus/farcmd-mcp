@@ -1,0 +1,18 @@
+import type { DatabaseSync } from 'node:sqlite';
+import type { CommandLevel } from '../command-registry.js';
+
+export interface OAuthGrant {
+  userId:string; clientId:string; clientName:string; allowedLevels:CommandLevel[];
+  level5PermanentlyDenied:boolean; createdAt:number; updatedAt:number; revokedAt?:number; lastUsedAt?:number;
+}
+function levels(value:string):CommandLevel[]{return value.split(',').filter(Boolean).map(Number).filter((v):v is CommandLevel=>v>=1&&v<=5) as CommandLevel[];}
+export class SqliteOAuthGrantStore {
+  constructor(private readonly db:DatabaseSync){}
+  get(userId:string,clientId:string):OAuthGrant|undefined{const r=this.db.prepare('SELECT * FROM oauth_grants WHERE user_id=? AND client_id=?').get(userId,clientId) as any;return r?{userId:r.user_id,clientId:r.client_id,clientName:r.client_name,allowedLevels:levels(r.allowed_levels),level5PermanentlyDenied:!!r.level5_permanently_denied,createdAt:r.created_at,updatedAt:r.updated_at,...(r.revoked_at?{revokedAt:r.revoked_at}:{}),...(r.last_used_at?{lastUsedAt:r.last_used_at}:{})}:undefined;}
+  upsert(userId:string,clientId:string,clientName:string,allowedLevels:CommandLevel[],level5PermanentlyDenied:boolean):void{const now=Date.now(),normalized=[...new Set(allowedLevels)].sort((a,b)=>a-b).join(',');this.db.prepare('INSERT INTO oauth_grants (user_id,client_id,client_name,allowed_levels,level5_permanently_denied,created_at,updated_at,revoked_at,last_used_at) VALUES (?,?,?,?,?,?,?,NULL,NULL) ON CONFLICT(user_id,client_id) DO UPDATE SET client_name=excluded.client_name,allowed_levels=excluded.allowed_levels,level5_permanently_denied=excluded.level5_permanently_denied,updated_at=excluded.updated_at,revoked_at=NULL').run(userId,clientId,clientName,normalized,level5PermanentlyDenied?1:0,now,now);}
+  revoke(userId:string,clientId:string):void{const now=Date.now();this.db.prepare('UPDATE oauth_grants SET revoked_at=?,updated_at=? WHERE user_id=? AND client_id=?').run(now,now,userId,clientId);}
+  update(userId:string,clientId:string,allowedLevels:CommandLevel[],level5PermanentlyDenied:boolean):void{const current=this.get(userId,clientId);if(!current)throw new Error('OAuth source not found.');if(current.level5PermanentlyDenied&&!level5PermanentlyDenied)throw new Error('Level 5 has been permanently prohibited for this OAuth source.');if(current.level5PermanentlyDenied&&allowedLevels.includes(5))throw new Error('Level 5 has been permanently prohibited for this OAuth source.');const now=Date.now(),normalized=[...new Set(allowedLevels)].sort((a,b)=>a-b).join(',');this.db.prepare('UPDATE oauth_grants SET allowed_levels=?,level5_permanently_denied=?,updated_at=?,revoked_at=NULL WHERE user_id=? AND client_id=?').run(normalized,level5PermanentlyDenied?1:0,now,userId,clientId);}
+  touch(userId:string,clientId:string):void{this.db.prepare('UPDATE oauth_grants SET last_used_at=? WHERE user_id=? AND client_id=? AND revoked_at IS NULL').run(Date.now(),userId,clientId);}
+  list(userId:string):OAuthGrant[]{const rows=this.db.prepare('SELECT * FROM oauth_grants WHERE user_id=? ORDER BY client_name,client_id').all(userId) as any[];return rows.map(r=>({userId:r.user_id,clientId:r.client_id,clientName:r.client_name,allowedLevels:levels(r.allowed_levels),level5PermanentlyDenied:!!r.level5_permanently_denied,createdAt:r.created_at,updatedAt:r.updated_at,...(r.revoked_at?{revokedAt:r.revoked_at}:{}),...(r.last_used_at?{lastUsedAt:r.last_used_at}:{})}));}
+  isAllowed(userId:string,clientId:string,level:CommandLevel):boolean{const g=this.get(userId,clientId);return !!g&&!g.revokedAt&&g.allowedLevels.includes(level);}
+}
