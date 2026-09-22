@@ -57,5 +57,5 @@ export class SqliteUserStore implements UserStore {
   getUser(id:string):McpUser|undefined{return this.map(this.db.prepare('SELECT * FROM users WHERE id=?').get(id) as any);}
   updateUser(id:string,name:string,email:string):void{this.db.prepare('UPDATE users SET name=?,email=? WHERE id=?').run(name,email,id);}
   getUserByEmail(email:string):McpUser|undefined{return this.map(this.db.prepare('SELECT * FROM users WHERE lower(email)=lower(?)').get(email) as any);}
-  private map=(r:any):McpUser=>r?{id:r.id,name:r.name,...(r.email?{email:r.email}:{}),...(r.password_hash?{passwordHash:r.password_hash}:{}),createdAt:r.created_at}:undefined;
+  private map=(r:any):McpUser=>r?{id:r.id,name:r.name,...(r.email?{email:r.email}:{}),...(r.password_hash?{passwordHash:r.password_hash}:{}),createdAt:r.created_at} as McpUser;
 }
