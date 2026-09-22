@@ -53,9 +53,9 @@ export class SqliteAuthStore implements AuthStore, WebSessionStore {
 export class SqliteUserStore implements UserStore {
   constructor(private readonly db:DatabaseSync){}
   createUser(u:McpUser):void{this.db.prepare('INSERT INTO users (id,name,email,password_hash,created_at) VALUES (?,?,?,?,?)').run(u.id,u.name,u.email??null,u.passwordHash??null,u.createdAt);}
-  listUsers():McpUser[]{return (this.db.prepare('SELECT * FROM users ORDER BY name,id').all() as any[]).map(this.map);}
+  listUsers():McpUser[]{return (this.db.prepare('SELECT * FROM users ORDER BY name,id').all() as any[]).map(this.map).filter((u):u is McpUser=>u!==undefined);}
   getUser(id:string):McpUser|undefined{return this.map(this.db.prepare('SELECT * FROM users WHERE id=?').get(id) as any);}
   updateUser(id:string,name:string,email:string):void{this.db.prepare('UPDATE users SET name=?,email=? WHERE id=?').run(name,email,id);}
   getUserByEmail(email:string):McpUser|undefined{return this.map(this.db.prepare('SELECT * FROM users WHERE lower(email)=lower(?)').get(email) as any);}
-  private map=(r:any):McpUser=>r?{id:r.id,name:r.name,...(r.email?{email:r.email}:{}),...(r.password_hash?{passwordHash:r.password_hash}:{}),createdAt:r.created_at} as McpUser;
+  private map=(r:any):McpUser|undefined=>r?{id:r.id,name:r.name,...(r.email?{email:r.email}:{}),...(r.password_hash?{passwordHash:r.password_hash}:{}),createdAt:r.created_at}:undefined;
 }
