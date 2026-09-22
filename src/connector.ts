@@ -16,6 +16,7 @@ export interface PendingConfirmation {ok:true;pending:true;commandId:string;leve
 export interface FarcmdConnector {
   health(context:ConnectorContext):Promise<{ok:true}>;
   listCommands(context:ConnectorContext):Promise<CommandSummary[]>;
+  visibleLevels(context:ConnectorContext):CommandLevel[];
   executeCommand(context:ConnectorContext,commandId:string,expectedLevel:CommandLevel):Promise<CommandExecution|PendingConfirmation>;
   approvePending(userId:string,token:string,password?:string):Promise<CommandExecution>;
 }
