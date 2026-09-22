@@ -77,7 +77,7 @@ function privateIp(address: string) {
   }
   const p = address.split('.').map(Number);
   if (p.length !== 4 || p.some(x => !Number.isInteger(x) || x < 0 || x > 255)) return true;
-  const [a,b] = p;
+  const a = p[0]!; const b = p[1]!;
   return a === 0 || a === 10 || a === 127 || (a === 169 && b === 254) ||
     (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168);
 }
