@@ -5,7 +5,13 @@ import type { UserStore, WebSessionStore } from './storage/interface.js';
 import { WebSessionService } from './web-session.js';
 import { SqliteSshStore } from './storage/ssh.js';
 import { decryptSecret, encryptSecret } from './crypto-at-rest.js';
-import { executeSshCommand } from './ssh.js';
+import { executeSshCommand, inspectPrivateKey, testSshConnection } from './ssh.js';
+import { getSshPassphrase, lockSshKey, unlockSshKey } from './ssh-key-cache.js';
+import { SqliteCommandStore, type CommandLevel } from './command-registry.js';
+import { SqliteExecutionHistoryStore } from './execution-history.js';
+import { FarcmdConnectorImpl } from './connector.js';
+import { SqliteExecutionStore } from './execution.js';
+import { isCommandLevel } from './command-levels.js';
 
 const attempts=new Map<string,{count:number;reset:number}>();
 const MAX_ATTEMPTS=8;
