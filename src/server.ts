@@ -1,11 +1,15 @@
 import Fastify from 'fastify';
 import formbody from '@fastify/formbody';
+import cookie from '@fastify/cookie';
+import fastifyStatic from '@fastify/static';
+import { join } from 'node:path';
 import { hash } from '@node-rs/argon2';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { FarcmdConnectorImpl } from './connector.js';
 import { mountMcpHttp } from './mcp/http.js';
 import { mountOAuthMetadata } from './oauth-metadata.js';
 import { mountAuthorizationServer } from './oauth/authorization-server.js';
+import { mountWebApi } from './web-api.js';
 import { SqliteAuthStore, SqliteUserStore } from './storage/sqlite.js';
 
 const port = Number(process.env.PORT ?? '5999');
@@ -38,6 +42,12 @@ if (!users.getUser(defaultUserId)) {
 
 const app = Fastify({ logger:true });
 await app.register(formbody);
+await app.register(cookie);
+await mountWebApi(app, users, store);
+if (process.env.NODE_ENV === 'production') {
+  await app.register(fastifyStatic, { root: join(process.cwd(), 'dist/web'), prefix: '/' });
+  app.get('/', async (_request, reply) => reply.sendFile('index.html'));
+}
 
 await mountOAuthMetadata(app, publicUrl);
 await mountAuthorizationServer(app, publicUrl, publicUrl + '/mcp', secret, store, users);
