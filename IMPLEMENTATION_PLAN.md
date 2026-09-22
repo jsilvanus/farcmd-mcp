@@ -47,9 +47,11 @@ These are architectural invariants, not optional UI behavior:
 1. An MCP client can never retrieve the raw shell command.
 2. Execution is only possible through a command's assigned level-specific MCP tool.
 3. The server verifies the command's real level instead of trusting the tool name.
-4. OAuth authorization grants explicitly contain the enabled command levels.
-5. A revoked/expired authorization cannot execute commands.
-6. Users can permanently disallow level 5 for an OAuth source.
+4. OAuth authorization grants control which command levels are visible to that OAuth client.
+5. MCP-client tool permissions (allow/ask/deny) are separate from farcmd's authorization and are not trusted as server-side security.
+6. A revoked/expired authorization cannot discover or execute commands.
+7. Levels 1–3 execute without additional farcmd confirmation; level 4 requires a human UI approval; level 5 requires a separate execution password.
+8. The level-5 execution password is independent of SSH-key passphrases.
 7. SSH private keys are encrypted at rest and never returned to MCP clients.
 8. SSH host keys/fingerprints are verified; unknown hosts are not silently trusted.
 9. MCP execution output is returned to the AI and recorded in execution history.
@@ -254,45 +256,46 @@ Only then is the stored command sent to SSH.
 
 ---
 
-## Phase 6 — OAuth source permissions and five-level consent
+## Phase 6 — OAuth visibility and human confirmation
 
-Connect OAuth authorization to command-level permissions.
+Separate three security decisions:
 
-Model an OAuth authorization/grant roughly as:
+1. **MCP client tool permission:** ChatGPT or another MCP client may independently classify a tool as **allow / ask / deny**. farcmd does not treat that client-side choice as a security boundary.
+2. **OAuth visibility:** during OAuth authorization, the human chooses which command levels are **shown as tools/capabilities** to that OAuth source. Hidden levels are omitted from `list_commands` and cannot be executed through that source.
+3. **farcmd execution confirmation:** commands that are visible and invoked still pass through a separate server-side confirmation layer.
 
-`oauth_grant`
+The command levels now mean:
 
-- user_id
-- client_id
-- client metadata
-- allowed_levels
-- created_at
-- expires_at/revoked_at
-- last_used_at
+| Level | Execution requirement |
+|---|---|
+| 1 | Execute immediately |
+| 2 | Execute immediately |
+| 3 | Execute immediately |
+| 4 | Human must press an approval button in the farcmd web UI |
+| 5 | Human must enter a dedicated execution password in the farcmd web UI |
 
-During authorization, the consent UI shows something like:
+Level 5's execution password is independent of the SSH private-key passphrase. The SSH key passphrase unlocks a credential; the execution password authorizes a dangerous operation.
 
-- Level 1 — allowed
-- Level 2 — allowed
-- Level 3 — allowed
-- Level 4 — not allowed
-- Level 5 — not allowed
+Implement:
 
-The user chooses the permitted levels for that OAuth source.
+- OAuth grant `visible_levels`
+- migration from the old `allowed_levels` representation
+- optional permanent hiding of level 5
+- live visibility checks on command discovery and execution
+- pending execution records with short-lived approval tokens
+- level 4 human approval page
+- level 5 password confirmation page
+- hashed per-user execution password
+- immediate invalidation of pending execution if OAuth permission, command, or target becomes unavailable
+- separate UI wording for OAuth visibility versus MCP client's allow/ask/deny decision
 
-Support:
+The execution path must be:
 
-- per-source level selection
-- later permission changes
-- revocation
-- optional permanent prohibition of level 5
-- token/grant invalidation when permissions are revoked
+`MCP tool call → OAuth visibility check → command lookup → confirmation requirement → optional human approval/password → SSH execution`
 
-The MCP authorization layer must derive effective permissions from the stored grant, not from client claims.
+The exact shell command remains server-side throughout.
 
-**Deliverable:** each AI connection has its own explicit command-power boundary. Phase 6 is implemented: OAuth grants persist per user/client, authorization consent selects levels 1–5, level 5 can be permanently prohibited, grants can be edited or revoked in the web UI, and MCP execution checks the live grant so revocation/permission changes take effect immediately.
-
----
+**Deliverable:** OAuth controls capability visibility, the MCP client controls its own allow/ask/deny interaction, and farcmd independently requires human confirmation for levels 4–5. Phase 6 remodeled accordingly.
 
 ## Phase 7 — Execution history and human shell history
 
