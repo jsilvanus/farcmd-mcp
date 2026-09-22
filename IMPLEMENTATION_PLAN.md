@@ -282,7 +282,7 @@ Implement:
 - migration from the old `allowed_levels` representation
 - optional permanent hiding of level 5
 - live visibility checks on command discovery and execution
-- pending execution records with short-lived approval tokens
+- pending execution records with short-lived approval tokens and persisted results until the MCP client retrieves them
 - level 4 human approval page
 - level 5 password confirmation page
 - hashed per-user execution password
@@ -293,7 +293,7 @@ The execution path must be:
 
 `MCP tool call → OAuth visibility check → command lookup → confirmation requirement → optional human approval/password → SSH execution`
 
-The exact shell command remains server-side throughout.
+After human confirmation, the MCP client can call the same level-specific tool again with the confirmation token to retrieve the execution result. The exact shell command remains server-side throughout.
 
 **Deliverable:** OAuth controls capability visibility, the MCP client controls its own allow/ask/deny interaction, and farcmd independently requires human confirmation for levels 4–5. Phase 6 remodeled accordingly.
 
