@@ -43,7 +43,7 @@ function makeSshConfig(target:SshTargetConfig,key:SshKeyMaterial,hostVerifier:(f
     host:target.hostname,port:target.port,username:target.username,
     privateKey:key.privateKey,...(key.passphrase!==undefined?{passphrase:key.passphrase}:{}),
     readyTimeout:10_000,hostHash:'sha256',
-    hostVerifier:fingerprint=>{ presented='sha256:'+fingerprint; return hostVerifier(presented); },
+    hostVerifier:(fingerprint:string)=>{ presented='sha256:'+fingerprint; return hostVerifier(presented); },
   };
 }
 
@@ -70,9 +70,9 @@ export async function executeSshCommand(target:SshTargetConfig,key:SshKeyMateria
     client.once('ready',()=>{
       client.exec(command,(err,stream)=>{
         if(err){finish({exitCode:null,stdout,stderr:stderr+'\n'+err.message,durationMs:Date.now()-started});return;}
-        stream.on('data',chunk=>{stdout+=chunk.toString();});
-        stream.stderr.on('data',chunk=>{stderr+=chunk.toString();});
-        stream.on('close',(code,signal)=>finish({exitCode:typeof code==='number'?code:null,...(signal?{signal}:{ }),stdout,stderr,durationMs:Date.now()-started,truncated}));
+        stream.on('data',(chunk:Buffer)=>{stdout+=chunk.toString();});
+        stream.stderr.on('data',(chunk:Buffer)=>{stderr+=chunk.toString();});
+        stream.on('close',(code:number|null,signal:string|undefined)=>finish({exitCode:typeof code==='number'?code:null,...(signal?{signal}:{ }),stdout,stderr,durationMs:Date.now()-started,truncated}));
       });
     });
     client.once('error',err=>{if(!settled)finish({exitCode:null,stdout,stderr:stderr+'\n'+err.message,durationMs:Date.now()-started});});
