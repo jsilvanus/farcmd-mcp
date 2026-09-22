@@ -1,0 +1,27 @@
+import type { FastifyInstance } from 'fastify';
+
+export async function mountOAuthMetadata(app: FastifyInstance, publicUrl: string): Promise<void> {
+  const resource = publicUrl + '/mcp';
+  const metadata = {
+    issuer: publicUrl,
+    authorization_endpoint: publicUrl + '/oauth/authorize',
+    token_endpoint: publicUrl + '/oauth/token',
+    response_types_supported: ['code'],
+    grant_types_supported: ['authorization_code', 'refresh_token'],
+    code_challenge_methods_supported: ['S256'],
+    token_endpoint_auth_methods_supported: ['none'],
+    scopes_supported: ['mcp'],
+    client_id_metadata_document_supported: true,
+    authorization_response_iss_parameter_supported: true,
+  };
+
+  app.get('/.well-known/oauth-protected-resource', async (_request, reply) => reply.send({
+    resource,
+    authorization_servers: [publicUrl],
+    scopes_supported: ['mcp'],
+    bearer_methods_supported: ['header'],
+  }));
+
+  app.get('/.well-known/oauth-authorization-server', async (_request, reply) => reply.send(metadata));
+  app.get('/.well-known/openid-configuration', async (_request, reply) => reply.send(metadata));
+}
