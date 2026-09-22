@@ -12,6 +12,9 @@ import { isCommandLevel } from './command-levels.js';
 import type { CommandLevel } from './command-registry.js';
 import { FarcmdConnectorImpl } from './connector.js';
 import { SqliteExecutionStore } from './execution.js';
+import { SqliteExecutionHistoryStore } from './execution-history.js';
+import { executeSshCommand } from './ssh.js';
+import { decryptSecret } from './crypto-at-rest.js';
 
 const attempts=new Map<string,{count:number;reset:number}>();
 const MAX_ATTEMPTS=8;
@@ -59,6 +62,7 @@ export async function mountWebApi(app:FastifyInstance, users:UserStore, sessionS
   if (!sshDb) throw new Error('Web session store must expose the application database');
   const ssh=new SqliteSshStore(sshDb);
   const commands=new SqliteCommandStore(sshDb);
+  const executionHistory=new SqliteExecutionHistoryStore(sshDb);
   const connector=new FarcmdConnectorImpl(sshDb,process.env.MCP_PUBLIC_URL ?? `http://localhost:${process.env.PORT ?? '5999'}`);
   app.get('/api/ssh/keys',async (request,reply)=>{
     const user=await requireUser(request,reply,users,sessions); if(!user)return;
@@ -113,6 +117,26 @@ export async function mountWebApi(app:FastifyInstance, users:UserStore, sessionS
   app.post('/api/commands',async(request,reply)=>{const user=await requireUser(request,reply,users,sessions);if(!user)return;const b=request.body as Record<string,unknown>;const name=typeof b.name==='string'?b.name.trim():'';const description=typeof b.description==='string'?b.description.trim():'';const shellCommand=typeof b.shellCommand==='string'?b.shellCommand.trim():'';const targetId=typeof b.targetId==='string'?b.targetId:'';const level=typeof b.level==='number'?b.level:Number(b.level);if(!name||name.length>120||description.length>2000||!shellCommand||shellCommand.length>10000||!isCommandLevel(level)||!ssh.getTarget(user.id,targetId))return reply.code(400).send({error:'Invalid command data'});const id=crypto.randomUUID(),now=Date.now();commands.create({id,userId:user.id,targetId,name,description,shellCommand,level,enabled:true,createdAt:now,updatedAt:now});return reply.code(201).send({command:commands.get(user.id,id)});});
   app.patch('/api/commands/:id',async(request,reply)=>{const user=await requireUser(request,reply,users,sessions);if(!user)return;const id=(request.params as {id:string}).id;const cur=commands.get(user.id,id);if(!cur)return reply.code(404).send({error:'Command not found'});const b=request.body as Record<string,unknown>;const next={...cur,name:typeof b.name==='string'?b.name.trim():cur.name,description:typeof b.description==='string'?b.description.trim():cur.description,shellCommand:typeof b.shellCommand==='string'?b.shellCommand.trim():cur.shellCommand,targetId:typeof b.targetId==='string'?b.targetId:cur.targetId,level:b.level===undefined?cur.level:(typeof b.level==='number'?b.level:Number(b.level)),enabled:typeof b.enabled==='boolean'?b.enabled:cur.enabled,updatedAt:Date.now()};if(!next.name||next.name.length>120||next.description.length>2000||!next.shellCommand||next.shellCommand.length>10000||!isCommandLevel(next.level)||!ssh.getTarget(user.id,next.targetId))return reply.code(400).send({error:'Invalid command data'});commands.update(next);return {command:commands.get(user.id,id)};});
   app.delete('/api/commands/:id',async(request,reply)=>{const user=await requireUser(request,reply,users,sessions);if(!user)return;const id=(request.params as {id:string}).id;if(!commands.get(user.id,id))return reply.code(404).send({error:'Command not found'});commands.delete(user.id,id);return {ok:true};});
+  app.get('/api/history/executions',async(request,reply)=>{
+    const user=await requireUser(request,reply,users,sessions);if(!user)return;
+    const q=request.query as Record<string,string|undefined>;
+    const level=q.level?Number(q.level):undefined;
+    const rows=executionHistory.list(user.id,{clientId:q.clientId,commandId:q.commandId,level:isCommandLevel(level)?level:undefined,status:q.status as any,search:q.search,limit:q.limit?Number(q.limit):50,offset:q.offset?Number(q.offset):0});
+    return {executions:rows,total:executionHistory.count(user.id)};
+  });
+  app.get('/api/history/shell',async(request,reply)=>{
+    const user=await requireUser(request,reply,users,sessions);if(!user)return;
+    const q=request.query as Record<string,string|undefined>; const targetId=q.targetId;
+    if(!targetId)return reply.code(400).send({error:'targetId is required'});
+    const target=ssh.getTarget(user.id,targetId);if(!target)return reply.code(404).send({error:'SSH target not found'});
+    const key=ssh.getKey(user.id,target.sshKeyId);if(!key)return reply.code(404).send({error:'SSH key not found'});
+    const passphrase=getSshPassphrase(user.id,key.id);let privateKey:string;
+    try{privateKey=decryptSecret(key.encryptedPrivateKey,'ssh-key:'+user.id+':'+key.id);}catch{return reply.code(500).send({error:'Unable to decrypt SSH key'});}
+    const command="printf '\\n--- .bash_history ---\\n'; tail -n 500 ~/.bash_history 2>/dev/null; printf '\\n--- .zsh_history ---\\n'; tail -n 500 ~/.zsh_history 2>/dev/null";
+    const result=await executeSshCommand({hostname:target.hostname,port:target.port,username:target.username,...(target.hostFingerprint?{hostFingerprint:target.hostFingerprint}: {})},{privateKey,...(passphrase!==undefined?{passphrase}:{})},command,15000);
+    const redacted=result.stdout.replace(/(?:password|passwd|token|secret|api[_-]?key)\\s*[=:]\\s*[^\\s]+/gi,'$1=[REDACTED]').replace(/(https?:\\/\\/[^\\s:@]+:)[^\\s@]+@/gi,'$1[REDACTED]@');
+    return {target:{id:target.id,name:target.name},stdout:redacted,stderr:result.stderr,exitCode:result.exitCode,durationMs:result.durationMs,warning:'Remote shell history is human-only and may contain sensitive or unrelated commands. It is not MCP execution history.'};
+  });
   app.get('/api/confirm/:token',async(request,reply)=>{const user=await requireUser(request,reply,users,sessions);if(!user)return;const token=(request.params as {token:string}).token;const pending=(new SqliteExecutionStore(sshDb)).get(token);if(!pending||pending.userId!==user.id)return reply.code(404).send({error:'Confirmation request not found or expired'});const command=commands.get(user.id,pending.commandId);if(!command)return reply.code(404).send({error:'Command no longer exists'});const grant=(sessionStore as any).getOAuthGrant(user.id,pending.clientId);return {command:{id:command.id,name:command.name,description:command.description,level:command.level,confirmation:pending.level===4?'human':'password'},clientId:pending.clientId,clientName:grant?.clientName??pending.clientId,expiresAt:pending.expiresAt};});
   app.post('/api/confirm/:token',async(request,reply)=>{const user=await requireUser(request,reply,users,sessions);if(!user)return;const b=request.body as Record<string,unknown>;try{return await connector.approvePending(user.id,(request.params as {token:string}).token,typeof b.password==='string'?b.password:undefined);}catch(error){return reply.code(400).send({error:error instanceof Error?error.message:String(error)});}});
   app.get('/api/oauth/grants',async(request,reply)=>{const user=await requireUser(request,reply,users,sessions);if(!user)return;return {grants:(sessionStore as any).listOAuthGrants(user.id).map((g:any)=>({...g,revoked:!!g.revokedAt}))};});
