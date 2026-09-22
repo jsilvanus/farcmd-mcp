@@ -32,7 +32,7 @@ export function createMcpServer(options:McpServerOptions):McpServer{
   });
   const registerLevel=(level:CommandLevel)=>{
     server.registerTool('command_level_'+level,security({
-      description:'Execute one predefined SSH command assigned to this authorization level. Input is only a command ID; the server keeps the exact shell command private.',
+      description:'Execute one predefined SSH command. OAuth controls whether the command level is exposed; levels 4 and 5 require separate human confirmation. Input is only a command ID; the server keeps the exact shell command private.',
       inputSchema:{commandId:z.string().uuid().describe('ID of the predefined command capability')},
     }),async(args,extra)=>{
       try{return result(await options.connector.executeCommand(contextFromExtra(extra),args.commandId,level));}catch(error){return errorResult(error);}
