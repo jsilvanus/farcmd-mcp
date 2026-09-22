@@ -69,7 +69,7 @@ export async function testSshConnection(target: SshTargetConfig, key: SshKeyMate
       hostHash: 'sha256',
       hostVerifier: fingerprint => {
         presented = 'sha256:' + fingerprint;
-        return !target.hostFingerprint || target.hostFingerprint === presented;
+        return !!target.hostFingerprint && target.hostFingerprint === presented;
       },
     };
     client.once('ready', () => finish({ ok: true, ...(presented ? { fingerprint: presented } : {}) }));
