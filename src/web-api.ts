@@ -67,6 +67,14 @@ export async function mountWebApi(app:FastifyInstance, users:UserStore, sessionS
     ssh.createKey({id,userId:user.id,name,encryptedPrivateKey,...(inspected.fingerprint?{fingerprint:inspected.fingerprint}:{}),createdAt:now,updatedAt:now});
     return reply.code(201).send({key:{id,name,fingerprint:inspected.fingerprint,encrypted:true,passphraseRequired:inspected.encrypted}});
   });
+  app.patch('/api/ssh/keys/:id',async (request,reply)=>{
+    const user=await requireUser(request,reply,users,sessions); if(!user)return; const id=(request.params as {id:string}).id; const current=ssh.getKey(user.id,id); if(!current)return reply.code(404).send({error:'SSH key not found'}); const b=request.body as Record<string,unknown>;
+    const name=typeof b.name==='string'?b.name.trim():current.name; const privateKey=typeof b.privateKey==='string'?b.privateKey:undefined;
+    if(!name||name.length>120)return reply.code(400).send({error:'Invalid key name'});
+    let encryptedPrivateKey=current.encryptedPrivateKey; let fingerprint=current.fingerprint;
+    if(privateKey!==undefined){ const inspected=inspectPrivateKey(privateKey); if(!inspected.valid)return reply.code(400).send({error:'The uploaded value is not a supported SSH private key'}); encryptedPrivateKey=encryptSecret(privateKey,'ssh-key:'+user.id+':'+id); fingerprint=inspected.fingerprint; lockSshKey(user.id,id); }
+    ssh.updateKey({...current,name,encryptedPrivateKey,...(fingerprint?{fingerprint}:{fingerprint:undefined}),updatedAt:Date.now()}); return {key:ssh.getKey(user.id,id)};
+  });
   app.post('/api/ssh/keys/:id/unlock',async (request,reply)=>{
     const user=await requireUser(request,reply,users,sessions); if(!user)return;
     const key=ssh.getKey(user.id,(request.params as {id:string}).id); if(!key)return reply.code(404).send({error:'SSH key not found'});
