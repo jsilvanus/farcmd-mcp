@@ -29,6 +29,7 @@ export class FarcmdConnectorImpl implements FarcmdConnector {
   }
   async health(_context:ConnectorContext):Promise<{ok:true}>{return {ok:true};}
   visibleLevels(context:ConnectorContext):CommandLevel[]{const grant=this.grants.get(context.userId,context.clientId);return grant&&!grant.revokedAt?[...grant.visibleLevels]:[];}
+  visibleLevels(context:ConnectorContext):CommandLevel[]{const grant=this.grants.get(context.userId,context.clientId);return grant&&!grant.revokedAt?[...grant.visibleLevels]:[];}
   async listCommands(context:ConnectorContext):Promise<CommandSummary[]>{
     const grant=this.grants.get(context.userId,context.clientId);
     if(!grant||grant.revokedAt)return [];
