@@ -47,7 +47,7 @@ export class SqliteAuthStore implements AuthStore, WebSessionStore {
   saveRefreshToken(r:RefreshTokenRecord):void{this.db.prepare('INSERT INTO refresh_tokens (token,client_id,subject,scope,expires) VALUES (?,?,?,?,?)').run(r.token,r.clientId,r.subject,r.scope,r.expires);}
   getRefreshToken(token:string):RefreshTokenRecord|undefined{const r=this.db.prepare('SELECT * FROM refresh_tokens WHERE token=?').get(token) as any;if(!r||r.expires<Date.now()){if(r)this.db.prepare('DELETE FROM refresh_tokens WHERE token=?').run(token);return undefined;}return {token:r.token,clientId:r.client_id,subject:r.subject,scope:r.scope,expires:r.expires};}
   saveWebSession(r:WebSessionRecord):void{this.db.prepare('INSERT INTO web_sessions (token,user_id,expires) VALUES (?,?,?)').run(r.token,r.userId,r.expires);}
-  getWebSession(token:string):WebSessionRecord|undefined{const r=this.db.prepare('SELECT * FROM web_sessions WHERE token=?').get(token) as any;return r?{token:r.token,userId:r.user_id,expires:r.expires}:undefined;}
+  getWebSession(token:string):WebSessionRecord|undefined{const r=this.db.prepare('SELECT * FROM web_sessions WHERE token=?').get(token) as any;return r?{token:r.token,userId:r.user_id,expires:r.expires} as McpUser;}
   deleteWebSession(token:string):void{this.db.prepare('DELETE FROM web_sessions WHERE token=?').run(token);}
 }
 export class SqliteUserStore implements UserStore {
@@ -57,5 +57,5 @@ export class SqliteUserStore implements UserStore {
   getUser(id:string):McpUser|undefined{return this.map(this.db.prepare('SELECT * FROM users WHERE id=?').get(id) as any);}
   updateUser(id:string,name:string,email:string):void{this.db.prepare('UPDATE users SET name=?,email=? WHERE id=?').run(name,email,id);}
   getUserByEmail(email:string):McpUser|undefined{return this.map(this.db.prepare('SELECT * FROM users WHERE lower(email)=lower(?)').get(email) as any);}
-  private map=(r:any):McpUser|undefined=>r?{id:r.id,name:r.name,...(r.email?{email:r.email}:{}),...(r.password_hash?{passwordHash:r.password_hash}:{}),createdAt:r.created_at}:undefined;
+  private map=(r:any):McpUser=>r?{id:r.id,name:r.name,...(r.email?{email:r.email}:{}),...(r.password_hash?{passwordHash:r.password_hash}:{}),createdAt:r.created_at}:undefined;
 }
