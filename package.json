@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "OAuth-protected MCP server foundation for predefined SSH command capabilities.",
+  "description": "OAuth-protected MCP server for predefined SSH command capabilities.",
   "engines": {
     "node": ">=22"
   },
