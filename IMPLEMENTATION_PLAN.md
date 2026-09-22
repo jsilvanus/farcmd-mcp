@@ -53,11 +53,11 @@ These are architectural invariants, not optional UI behavior:
 7. Levels 1–3 execute without additional farcmd confirmation; level 4 requires a human UI approval; level 5 requires a separate execution password.
 8. The level-5 execution password is independent of SSH-key passphrases.
 7. SSH private keys are encrypted at rest and never returned to MCP clients.
-8. SSH host keys/fingerprints are verified; unknown hosts are not silently trusted.
-9. MCP execution output is returned to the AI and recorded in execution history.
-10. Remote shell history is a separate human-only feature and is not part of normal MCP discovery.
-11. V1 commands have no arbitrary AI-supplied shell arguments. Dynamic arguments, if ever added, must use typed/validated parameters rather than shell-string interpolation.
-12. Every execution is auditable.
+9. SSH host keys/fingerprints are verified; unknown hosts are not silently trusted.
+10. MCP execution output is returned to the AI and recorded in execution history.
+11. Remote shell history is a separate human-only feature and is not part of normal MCP discovery.
+12. V1 commands have no arbitrary AI-supplied shell arguments. Dynamic arguments, if ever added, must use typed/validated parameters rather than shell-string interpolation.
+13. Every execution is auditable.
 
 ---
 
@@ -274,7 +274,7 @@ The command levels now mean:
 | 4 | Human must press an approval button in the farcmd web UI |
 | 5 | Human must enter a dedicated execution password in the farcmd web UI |
 
-Level 5's execution password is independent of the SSH private-key passphrase. The SSH key passphrase unlocks a credential; the execution password authorizes a dangerous operation.
+Each Level 5 command has its own execution password, independent of the SSH private-key passphrase and of every other Level 5 command. The SSH key passphrase unlocks a credential; the execution password authorizes a dangerous operation.
 
 Implement:
 
@@ -285,7 +285,7 @@ Implement:
 - pending execution records with short-lived approval tokens and persisted results until the MCP client retrieves them
 - level 4 human approval page
 - level 5 password confirmation page
-- hashed per-user execution password
+- hashed per-command level-5 execution password
 - immediate invalidation of pending execution if OAuth permission, command, or target becomes unavailable
 - separate UI wording for OAuth visibility versus MCP client's allow/ask/deny decision
 
