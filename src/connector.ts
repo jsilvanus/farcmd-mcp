@@ -6,7 +6,6 @@ import { SqliteSshStore } from './storage/ssh.js';
 import { SqliteCommandStore, type CommandLevel } from './command-registry.js';
 import { SqliteOAuthGrantStore } from './oauth/grants.js';
 import { SqliteExecutionStore, confirmationForLevel, type ConfirmationRequirement } from './execution.js';
-import { SqliteUserStore } from './storage/sqlite.js';
 import { randomToken } from './oauth/pkce.js';
 import { SqliteExecutionHistoryStore } from './execution-history.js';
 
@@ -23,9 +22,9 @@ export interface FarcmdConnector {
 }
 
 export class FarcmdConnectorImpl implements FarcmdConnector {
-  private readonly ssh:SqliteSshStore; private readonly commands:SqliteCommandStore; private readonly grants:SqliteOAuthGrantStore; private readonly pending:SqliteExecutionStore; private readonly users:SqliteUserStore; private readonly history:SqliteExecutionHistoryStore;
+  private readonly ssh:SqliteSshStore; private readonly commands:SqliteCommandStore; private readonly grants:SqliteOAuthGrantStore; private readonly pending:SqliteExecutionStore;  private readonly history:SqliteExecutionHistoryStore;
   constructor(private readonly db:DatabaseSync,private readonly publicUrl:string){
-    this.ssh=new SqliteSshStore(db); this.commands=new SqliteCommandStore(db); this.grants=new SqliteOAuthGrantStore(db); this.pending=new SqliteExecutionStore(db); this.users=new SqliteUserStore(db); this.history=new SqliteExecutionHistoryStore(db);
+    this.ssh=new SqliteSshStore(db); this.commands=new SqliteCommandStore(db); this.grants=new SqliteOAuthGrantStore(db); this.pending=new SqliteExecutionStore(db); this.history=new SqliteExecutionHistoryStore(db);
   }
   async health(_context:ConnectorContext):Promise<{ok:true}>{return {ok:true};}
   async listCommands(context:ConnectorContext):Promise<CommandSummary[]>{
