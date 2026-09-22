@@ -34,7 +34,8 @@ export async function mountMcpHttp(app: FastifyInstance, options: McpHttpOptions
       }
     }
 
-    const server = createMcpServer({connector:options.connector,publicUrl:options.publicUrl});
+    const visibleLevels=authInfo&&typeof authInfo.extra?.userId==='string'?options.connector.visibleLevels({userId:authInfo.extra.userId,clientId:authInfo.clientId,accessToken:authInfo.token}):[];
+    const server = createMcpServer({connector:options.connector,publicUrl:options.publicUrl,visibleLevels});
     const transport = new StreamableHTTPServerTransport({});
     await server.connect(transport as unknown as Transport);
 
