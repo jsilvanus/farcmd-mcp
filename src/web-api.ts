@@ -44,7 +44,6 @@ async function requireUser(request:FastifyRequest, reply:FastifyReply, users:Use
 }
 
 export async function mountWebApi(app:FastifyInstance, users:UserStore, sessionStore:WebSessionStore): Promise<void> {
-  const sshStore=new SqliteSshStore((sessionStore as any).db ?? (sessionStore as any).getDatabase?.());
   app.addHook('preHandler', async (request,reply) => {
     if (['POST','PATCH','PUT','DELETE'].includes(request.method) && request.url.startsWith('/api/') && !checkMutationOrigin(request)) {
       return reply.code(403).send({error:'Invalid request origin'});
