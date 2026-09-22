@@ -59,7 +59,7 @@ export class FarcmdConnectorImpl implements FarcmdConnector {
     const confirmation=confirmationForLevel(p.level);
     if(confirmation==='password'){
       if(!password)throw new Error('Execution password required.');
-      if(!await this.users.verifyExecutionPassword(userId,password))throw new Error('Invalid execution password.');
+      if(!await this.commands.verifyExecutionPassword(userId,p.commandId,password))throw new Error('Invalid execution password.');
     }
     const result=await this.executeStoredCommand(p.userId,p.clientId,p.commandId,p.level); this.pending.complete(token,{exitCode:result.exitCode,stdout:result.stdout,stderr:result.stderr,durationMs:result.durationMs,...(result.signal?{signal:result.signal}:{})}); return result;
   }
