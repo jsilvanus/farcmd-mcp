@@ -1,4 +1,5 @@
-import { mkdirSync } from 'node:fs';\nimport { randomUUID } from 'node:crypto';
+import { mkdirSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import type { AuthStore, AuthorizationCodeRecord, McpUser, RefreshTokenRecord, UserStore, WebSessionRecord, WebSessionStore } from './interface.js';
@@ -18,14 +19,22 @@ export class SqliteAuthStore implements AuthStore, WebSessionStore {
       'CREATE TABLE IF NOT EXISTS commands (id TEXT PRIMARY KEY,user_id TEXT NOT NULL,target_id TEXT NOT NULL,name TEXT NOT NULL,description TEXT NOT NULL,shell_command TEXT NOT NULL,level INTEGER NOT NULL CHECK(level BETWEEN 1 AND 5),enabled INTEGER NOT NULL DEFAULT 1,execution_password_hash TEXT,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL);' +
       'CREATE TABLE IF NOT EXISTS oauth_grants (user_id TEXT NOT NULL,client_id TEXT NOT NULL,client_name TEXT NOT NULL,allowed_levels TEXT NOT NULL DEFAULT \'\',level5_permanently_denied INTEGER NOT NULL DEFAULT 0,visible_levels TEXT NOT NULL DEFAULT \'\',level5_permanently_hidden INTEGER NOT NULL DEFAULT 0,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL,revoked_at INTEGER,last_used_at INTEGER,PRIMARY KEY(user_id,client_id));' +
       'CREATE TABLE IF NOT EXISTS execution_history (id TEXT PRIMARY KEY,user_id TEXT NOT NULL,client_id TEXT NOT NULL,command_id TEXT NOT NULL,command_name TEXT NOT NULL,target_id TEXT NOT NULL,level INTEGER NOT NULL,started_at INTEGER NOT NULL,ended_at INTEGER NOT NULL,duration_ms INTEGER NOT NULL,exit_code INTEGER,stdout TEXT NOT NULL,stderr TEXT NOT NULL,status TEXT NOT NULL,error TEXT);' +
-      'CREATE TABLE IF NOT EXISTS security_events (id TEXT PRIMARY KEY,user_id TEXT,client_id TEXT,event TEXT NOT NULL,details TEXT,created_at INTEGER NOT NULL);' +\n      'CREATE TABLE IF NOT EXISTS pending_executions (token TEXT PRIMARY KEY,user_id TEXT NOT NULL,client_id TEXT NOT NULL,command_id TEXT NOT NULL,level INTEGER NOT NULL,created_at INTEGER NOT NULL,expires_at INTEGER NOT NULL,status TEXT NOT NULL,exit_code INTEGER,stdout TEXT,stderr TEXT,duration_ms INTEGER,signal TEXT);'
+      'CREATE TABLE IF NOT EXISTS security_events (id TEXT PRIMARY KEY,user_id TEXT,client_id TEXT,event TEXT NOT NULL,details TEXT,created_at INTEGER NOT NULL);' +
+      'CREATE TABLE IF NOT EXISTS pending_executions (token TEXT PRIMARY KEY,user_id TEXT NOT NULL,client_id TEXT NOT NULL,command_id TEXT NOT NULL,level INTEGER NOT NULL,created_at INTEGER NOT NULL,expires_at INTEGER NOT NULL,status TEXT NOT NULL,exit_code INTEGER,stdout TEXT,stderr TEXT,duration_ms INTEGER,signal TEXT);'
     );
         try{this.db.exec('ALTER TABLE commands ADD COLUMN execution_password_hash TEXT');}catch{}
-    try{this.db.exec('ALTER TABLE pending_executions ADD COLUMN exit_code INTEGER');}catch{}\n    try{this.db.exec('ALTER TABLE pending_executions ADD COLUMN stdout TEXT');}catch{}\n    try{this.db.exec('ALTER TABLE pending_executions ADD COLUMN stderr TEXT');}catch{}\n    try{this.db.exec('ALTER TABLE pending_executions ADD COLUMN duration_ms INTEGER');}catch{}\n    try{this.db.exec('ALTER TABLE pending_executions ADD COLUMN signal TEXT');}catch{}\n    try{this.db.exec('ALTER TABLE oauth_grants ADD COLUMN visible_levels TEXT NOT NULL DEFAULT \'\'');}catch{}
+    try{this.db.exec('ALTER TABLE pending_executions ADD COLUMN exit_code INTEGER');}catch{}
+    try{this.db.exec('ALTER TABLE pending_executions ADD COLUMN stdout TEXT');}catch{}
+    try{this.db.exec('ALTER TABLE pending_executions ADD COLUMN stderr TEXT');}catch{}
+    try{this.db.exec('ALTER TABLE pending_executions ADD COLUMN duration_ms INTEGER');}catch{}
+    try{this.db.exec('ALTER TABLE pending_executions ADD COLUMN signal TEXT');}catch{}
+    try{this.db.exec('ALTER TABLE oauth_grants ADD COLUMN visible_levels TEXT NOT NULL DEFAULT \'\'');}catch{}
     try{this.db.exec('ALTER TABLE oauth_grants ADD COLUMN level5_permanently_hidden INTEGER NOT NULL DEFAULT 0');}catch{}
     this.db.exec('UPDATE oauth_grants SET visible_levels=allowed_levels WHERE visible_levels=\'\' AND allowed_levels<>\'\';UPDATE oauth_grants SET level5_permanently_hidden=level5_permanently_denied WHERE level5_permanently_denied=1 AND level5_permanently_hidden=0;');
   }
-  getDatabase():DatabaseSync{return this.db;}\n  recordSecurityEvent(userId:string|undefined,clientId:string|undefined,event:string,details?:unknown):void{this.db.prepare('INSERT INTO security_events (id,user_id,client_id,event,details,created_at) VALUES (?,?,?,?,?,?)').run(randomUUID(),userId??null,clientId??null,event,details===undefined?null:JSON.stringify(details),Date.now());}\n  cleanupSecurityEvents(maxAgeMs=90*24*60*60_000):void{this.db.prepare('DELETE FROM security_events WHERE created_at < ?').run(Date.now()-maxAgeMs);}
+  getDatabase():DatabaseSync{return this.db;}
+  recordSecurityEvent(userId:string|undefined,clientId:string|undefined,event:string,details?:unknown):void{this.db.prepare('INSERT INTO security_events (id,user_id,client_id,event,details,created_at) VALUES (?,?,?,?,?,?)').run(randomUUID(),userId??null,clientId??null,event,details===undefined?null:JSON.stringify(details),Date.now());}
+  cleanupSecurityEvents(maxAgeMs=90*24*60*60_000):void{this.db.prepare('DELETE FROM security_events WHERE created_at < ?').run(Date.now()-maxAgeMs);}
   private grants(){return new SqliteOAuthGrantStore(this.db);}
   getOAuthGrant(u:string,c:string){return this.grants().get(u,c);}
   upsertOAuthGrant(u:string,c:string,n:string,l:number[],p:boolean){this.grants().upsert(u,c,n,l as any,p);}
