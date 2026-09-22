@@ -5,16 +5,7 @@ import type { UserStore, WebSessionStore } from './storage/interface.js';
 import { WebSessionService } from './web-session.js';
 import { SqliteSshStore } from './storage/ssh.js';
 import { decryptSecret, encryptSecret } from './crypto-at-rest.js';
-import { inspectPrivateKey, testSshConnection } from './ssh.js';
-import { getSshPassphrase, lockSshKey, unlockSshKey } from './ssh-key-cache.js';
-import { SqliteCommandStore } from './command-registry.js';
-import { isCommandLevel } from './command-levels.js';
-import type { CommandLevel } from './command-registry.js';
-import { FarcmdConnectorImpl } from './connector.js';
-import { SqliteExecutionStore } from './execution.js';
-import { SqliteExecutionHistoryStore } from './execution-history.js';
 import { executeSshCommand } from './ssh.js';
-import { decryptSecret } from './crypto-at-rest.js';
 
 const attempts=new Map<string,{count:number;reset:number}>();
 const MAX_ATTEMPTS=8;
@@ -133,7 +124,11 @@ export async function mountWebApi(app:FastifyInstance, users:UserStore, sessionS
     const key=ssh.getKey(user.id,target.sshKeyId);if(!key)return reply.code(404).send({error:'SSH key not found'});
     const passphrase=getSshPassphrase(user.id,key.id);let privateKey:string;
     try{privateKey=decryptSecret(key.encryptedPrivateKey,'ssh-key:'+user.id+':'+key.id);}catch{return reply.code(500).send({error:'Unable to decrypt SSH key'});}
-    const command="printf '\\n--- .bash_history ---\\n'; tail -n 500 ~/.bash_history 2>/dev/null; printf '\\n--- .zsh_history ---\\n'; tail -n 500 ~/.zsh_history 2>/dev/null";
+    const command="printf '
+--- .bash_history ---
+'; tail -n 500 ~/.bash_history 2>/dev/null; printf '
+--- .zsh_history ---
+'; tail -n 500 ~/.zsh_history 2>/dev/null";
     if(!target.enabled)return reply.code(400).send({error:'SSH target is disabled'});\n    if(!target.hostFingerprint)return reply.code(400).send({error:'SSH target has no pinned host fingerprint'});\n    const result=await executeSshCommand({hostname:target.hostname,port:target.port,username:target.username,...(target.hostFingerprint?{hostFingerprint:target.hostFingerprint}: {})},{privateKey,...(passphrase!==undefined?{passphrase}:{})},command,15000);
     const redacted=result.stdout.replace(/(?:password|passwd|token|secret|api[_-]?key)\\s*[=:]\\s*[^\\s]+/gi,'$1=[REDACTED]').replace(/(https?:\\/\\/[^\\s:@]+:)[^\\s@]+@/gi,'$1[REDACTED]@');
     return {target:{id:target.id,name:target.name},stdout:redacted,stderr:result.stderr,exitCode:result.exitCode,durationMs:result.durationMs,warning:'Remote shell history is human-only and may contain sensitive or unrelated commands. It is not MCP execution history.'};
