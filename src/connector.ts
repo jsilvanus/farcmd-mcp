@@ -8,6 +8,7 @@ import { SqliteOAuthGrantStore } from './oauth/grants.js';
 import { SqliteExecutionStore, confirmationForLevel, type ConfirmationRequirement } from './execution.js';
 import { SqliteUserStore } from './storage/sqlite.js';
 import { randomToken } from './oauth/pkce.js';
+import { SqliteExecutionHistoryStore } from './execution-history.js';
 
 export interface ConnectorContext { userId:string; clientId:string; accessToken:string; }
 export interface CommandSummary { id:string; name:string; description:string; level:CommandLevel; enabled:boolean; confirmation:ConfirmationRequirement; }
@@ -22,9 +23,9 @@ export interface FarcmdConnector {
 }
 
 export class FarcmdConnectorImpl implements FarcmdConnector {
-  private readonly ssh:SqliteSshStore; private readonly commands:SqliteCommandStore; private readonly grants:SqliteOAuthGrantStore; private readonly pending:SqliteExecutionStore; private readonly users:SqliteUserStore;
+  private readonly ssh:SqliteSshStore; private readonly commands:SqliteCommandStore; private readonly grants:SqliteOAuthGrantStore; private readonly pending:SqliteExecutionStore; private readonly users:SqliteUserStore; private readonly history:SqliteExecutionHistoryStore;
   constructor(private readonly db:DatabaseSync,private readonly publicUrl:string){
-    this.ssh=new SqliteSshStore(db); this.commands=new SqliteCommandStore(db); this.grants=new SqliteOAuthGrantStore(db); this.pending=new SqliteExecutionStore(db); this.users=new SqliteUserStore(db);
+    this.ssh=new SqliteSshStore(db); this.commands=new SqliteCommandStore(db); this.grants=new SqliteOAuthGrantStore(db); this.pending=new SqliteExecutionStore(db); this.users=new SqliteUserStore(db); this.history=new SqliteExecutionHistoryStore(db);
   }
   async health(_context:ConnectorContext):Promise<{ok:true}>{return {ok:true};}
   async listCommands(context:ConnectorContext):Promise<CommandSummary[]>{
@@ -49,7 +50,7 @@ export class FarcmdConnectorImpl implements FarcmdConnector {
       this.pending.create({token,userId:context.userId,clientId:context.clientId,commandId,level:command.level,createdAt:now,expiresAt});
       return {ok:true,pending:true,commandId,level:command.level,confirmation,approvalUrl:this.publicUrl+'/?page=confirm&token='+encodeURIComponent(token),confirmationToken:token,expiresAt};
     }
-    return this.executeStoredCommand(context.userId,commandId,command.level);
+    return this.executeStoredCommand(context.userId,context.clientId,commandId,command.level);
   }
   async approvePending(userId:string,token:string,password?:string):Promise<CommandExecution>{
     const p=this.pending.get(token); if(!p||p.userId!==userId)throw new Error('Confirmation request not found or expired.');
@@ -60,9 +61,9 @@ export class FarcmdConnectorImpl implements FarcmdConnector {
       if(!password)throw new Error('Execution password required.');
       if(!await this.users.verifyExecutionPassword(userId,password))throw new Error('Invalid execution password.');
     }
-    const result=await this.executeStoredCommand(p.userId,p.commandId,p.level); this.pending.complete(token,{exitCode:result.exitCode,stdout:result.stdout,stderr:result.stderr,durationMs:result.durationMs,...(result.signal?{signal:result.signal}:{})}); return result;
+    const result=await this.executeStoredCommand(p.userId,p.clientId,p.commandId,p.level); this.pending.complete(token,{exitCode:result.exitCode,stdout:result.stdout,stderr:result.stderr,durationMs:result.durationMs,...(result.signal?{signal:result.signal}:{})}); return result;
   }
-  private async executeStoredCommand(userId:string,commandId:string,level:CommandLevel):Promise<CommandExecution>{
+  private async executeStoredCommand(userId:string,clientId:string,commandId:string,level:CommandLevel):Promise<CommandExecution>{
     const command=this.commands.get(userId,commandId); if(!command||!command.enabled||command.level!==level)throw new Error('Command is no longer available.');
     const target=this.ssh.getTarget(userId,command.targetId); if(!target||!target.enabled)throw new Error('SSH target is unavailable.');
     if(!target.hostFingerprint)throw new Error('SSH target has no pinned host fingerprint.');
@@ -74,7 +75,10 @@ export class FarcmdConnectorImpl implements FarcmdConnector {
       if(inspected.encrypted&&!passphrase)throw new Error('SSH key is locked. Unlock it in the farcmd web UI.');
       throw new Error('Stored SSH key is invalid or the unlock passphrase is incorrect.');
     }
+    const startedAt=Date.now();
     const result=await executeSshCommand({hostname:target.hostname,port:target.port,username:target.username,hostFingerprint:target.hostFingerprint},{privateKey,...(passphrase!==undefined?{passphrase}:{})},command.shellCommand);
+    const status=result.signal==='TIMEOUT'?'timeout':result.exitCode===0?'success':'failed';
+    this.history.create({id:crypto.randomUUID(),userId,clientId,commandId,commandName:command.name,targetId:target.id,level,startedAt,endedAt:startedAt+result.durationMs,durationMs:result.durationMs,exitCode:result.exitCode,stdout:result.stdout,stderr:result.stderr,status});
     return {ok:true,commandId,level,...result};
   }
 }
