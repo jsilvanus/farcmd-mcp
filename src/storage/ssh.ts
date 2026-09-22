@@ -69,12 +69,12 @@ export class SqliteSshStore {
     this.db.prepare('DELETE FROM ssh_targets WHERE user_id=? AND id=?').run(userId,id);
   }
 
-  private mapKey = (row:any): SshKeyRecord|undefined => row ? {
+  private mapKey = (row:any): SshKeyRecord => row ? {
     id:row.id,userId:row.user_id,name:row.name,encryptedPrivateKey:row.encrypted_private_key,
     ...(row.fingerprint ? {fingerprint:row.fingerprint} : {}),createdAt:row.created_at,updatedAt:row.updated_at
   } : undefined;
 
-  private mapTarget = (row:any): SshTargetRecord|undefined => row ? {
+  private mapTarget = (row:any): SshTargetRecord => row ? {
     id:row.id,userId:row.user_id,name:row.name,hostname:row.hostname,port:row.port,username:row.username,
     sshKeyId:row.ssh_key_id,...(row.host_fingerprint ? {hostFingerprint:row.host_fingerprint}:{}),
     enabled:!!row.enabled,createdAt:row.created_at,updatedAt:row.updated_at
