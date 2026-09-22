@@ -11,10 +11,10 @@ export interface AuthStore {
   listOAuthGrants(userId:string):OAuthGrantLike[];
   touchOAuthGrant(userId:string,clientId:string):void;
 }
-export interface McpUser { id:string; name:string; email?:string; passwordHash?:string; executionPasswordHash?:string; createdAt:number; }
+export interface McpUser { id:string; name:string; email?:string; passwordHash?:string; createdAt:number; }
 export interface UserStore {
   createUser(user:McpUser):void; listUsers():McpUser[]; getUser(id:string):McpUser|undefined; getUserByEmail(email:string):McpUser|undefined;
-  updateUser(id:string,name:string,email:string):void; setExecutionPassword(id:string,passwordHash:string):void; verifyExecutionPassword(id:string,password:string):Promise<boolean>;
+  updateUser(id:string,name:string,email:string):void;
 }
 export interface WebSessionRecord { token:string; userId:string; expires:number; }
 export interface WebSessionStore { saveWebSession(record:WebSessionRecord):void; getWebSession(token:string):WebSessionRecord|undefined; deleteWebSession(token:string):void; }
