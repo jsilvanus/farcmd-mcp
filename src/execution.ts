@@ -12,7 +12,8 @@ export class SqliteExecutionStore {
     const r=this.db.prepare('SELECT token,user_id,client_id,command_id,level,created_at,expires_at,status,exit_code,stdout,stderr,duration_ms,signal FROM pending_executions WHERE token=?').get(token) as any;
     if(!r)return undefined;
     if(r.status==='pending'&&r.expires_at<Date.now()){this.expire(token);return undefined;}
-    return {token:r.token,userId:r.user_id,clientId:r.client_id,commandId:r.command_id,level:r.level,createdAt:r.created_at,expiresAt:r.expires_at,status:r.status,result:r.status==='completed'?{exitCode:r.exit_code,stdout:r.stdout??'',stderr:r.stderr??'',durationMs:r.duration_ms, ...(r.signal?{signal:r.signal}:{})}:undefined};
+    const base={token:r.token,userId:r.user_id,clientId:r.client_id,commandId:r.command_id,level:r.level,createdAt:r.created_at,expiresAt:r.expires_at,status:r.status};
+    return r.status==='completed' ? {...base,result:{exitCode:r.exit_code,stdout:r.stdout??'',stderr:r.stderr??'',durationMs:r.duration_ms,...(r.signal?{signal:r.signal}:{})}} : base;
   }
   consume(token:string):PendingExecution|undefined{const p=this.get(token);if(!p||p.status!=='pending')return undefined;const result=this.db.prepare("UPDATE pending_executions SET status='consumed' WHERE token=? AND status='pending'").run(token);return Number(result.changes)===1?p:undefined;}
   consumeCompleted(token:string):ExecutionResult|undefined{const p=this.get(token);if(!p||p.status!=='completed'||!p.result)return undefined;const result=this.db.prepare("UPDATE pending_executions SET status='consumed' WHERE token=? AND status='completed'").run(token);return Number(result.changes)===1?p.result:undefined;}
