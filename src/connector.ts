@@ -1,4 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
+import { randomUUID } from 'node:crypto';
 import { decryptSecret } from './crypto-at-rest.js';
 import { getSshPassphrase } from './ssh-key-cache.js';
 import { executeSshCommand, inspectPrivateKey } from './ssh.js';
@@ -52,13 +53,16 @@ export class FarcmdConnectorImpl implements FarcmdConnector {
     return this.executeStoredCommand(context.userId,context.clientId,commandId,command.level);
   }
   async approvePending(userId:string,token:string,password?:string):Promise<CommandExecution>{
-    const p=this.pending.get(token); if(!p||p.userId!==userId)throw new Error('Confirmation request not found or expired.');\n    const audit=(event:string,details?:unknown)=>{try{this.db.prepare('INSERT INTO security_events (id,user_id,client_id,event,details,created_at) VALUES (?,?,?,?,?,?)').run(crypto.randomUUID(),userId,p.clientId,event,details===undefined?null:JSON.stringify(details),Date.now());}catch{}};\n    audit('confirmation_attempt',{commandId:p.commandId,level:p.level});
+    const p=this.pending.get(token); if(!p||p.userId!==userId)throw new Error('Confirmation request not found or expired.');
+    const audit=(event:string,details?:unknown)=>{try{this.db.prepare('INSERT INTO security_events (id,user_id,client_id,event,details,created_at) VALUES (?,?,?,?,?,?)').run(randomUUID(),userId,p.clientId,event,details===undefined?null:JSON.stringify(details),Date.now());}catch{}};
+    audit('confirmation_attempt',{commandId:p.commandId,level:p.level});
     const grant=this.grants.get(p.userId,p.clientId); if(!grant||grant.revokedAt||!grant.visibleLevels.includes(p.level))throw new Error('The OAuth authorization is no longer permitted.');
     const command=this.commands.get(p.userId,p.commandId); if(!command||!command.enabled||command.level!==p.level)throw new Error('The command is no longer available.');
     const confirmation=confirmationForLevel(p.level);
     if(confirmation==='password'){
       if(!password)throw new Error('Execution password required.');
-      if(!await this.commands.verifyExecutionPassword(userId,p.commandId,password)){audit('level5_password_failed',{commandId:p.commandId});throw new Error('Invalid execution password.');}\n      audit('level5_password_accepted',{commandId:p.commandId});
+      if(!await this.commands.verifyExecutionPassword(userId,p.commandId,password)){audit('level5_password_failed',{commandId:p.commandId});throw new Error('Invalid execution password.');}
+      audit('level5_password_accepted',{commandId:p.commandId});
     }
     const result=await this.executeStoredCommand(p.userId,p.clientId,p.commandId,p.level); audit('confirmation_executed',{commandId:p.commandId,level:p.level}); this.pending.complete(token,{exitCode:result.exitCode,stdout:result.stdout,stderr:result.stderr,durationMs:result.durationMs,...(result.signal?{signal:result.signal}:{})}); return result;
   }
@@ -77,7 +81,7 @@ export class FarcmdConnectorImpl implements FarcmdConnector {
     const startedAt=Date.now();
     const result=await executeSshCommand({hostname:target.hostname,port:target.port,username:target.username,hostFingerprint:target.hostFingerprint},{privateKey,...(passphrase!==undefined?{passphrase}:{})},command.shellCommand);
     const status=result.signal==='TIMEOUT'?'timeout':result.exitCode===0?'success':'failed';
-    this.history.create({id:crypto.randomUUID(),userId,clientId,commandId,commandName:command.name,targetId:target.id,level,startedAt,endedAt:startedAt+result.durationMs,durationMs:result.durationMs,exitCode:result.exitCode,stdout:result.stdout,stderr:result.stderr,status});
+    this.history.create({id:randomUUID(),userId,clientId,commandId,commandName:command.name,targetId:target.id,level,startedAt,endedAt:startedAt+result.durationMs,durationMs:result.durationMs,exitCode:result.exitCode,stdout:result.stdout,stderr:result.stderr,status});
     return {ok:true,commandId,level,...result};
   }
 }
