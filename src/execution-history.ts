@@ -27,6 +27,6 @@ export class SqliteExecutionHistoryStore {
     const rows=this.db.prepare(`SELECT * FROM execution_history WHERE ${where.join(' AND ')} ORDER BY started_at DESC,id DESC LIMIT ? OFFSET ?`).all(...args) as any[];
     return rows.map(this.map);
   }
-  count(userId:string):number{return Number((this.db.prepare('SELECT COUNT(*) AS count FROM execution_history WHERE user_id=?').get(userId) as any).count);}
+  count(userId:string):number{return Number((this.db.prepare('SELECT COUNT(*) AS count FROM execution_history WHERE user_id=?').get(userId) as any).count);}\n  successfulCounts(userId:string):Array<{commandId:string;commandName:string;level:CommandLevel;count:number}>{return (this.db.prepare(\"SELECT command_id,command_name,level,COUNT(*) AS count FROM execution_history WHERE user_id=? AND status='success' GROUP BY command_id,command_name,level ORDER BY count DESC,command_name ASC\").all(userId) as any[]).map(r=>({commandId:r.command_id,commandName:r.command_name,level:r.level,count:Number(r.count)}));}
   private map=(r:any):ExecutionHistoryRecord=>({id:r.id,userId:r.user_id,clientId:r.client_id,commandId:r.command_id,commandName:r.command_name,targetId:r.target_id,level:r.level,startedAt:r.started_at,endedAt:r.ended_at,durationMs:r.duration_ms,exitCode:r.exit_code===null?null:r.exit_code,stdout:r.stdout??'',stderr:r.stderr??'',status:r.status,error:r.error??undefined});
 }
