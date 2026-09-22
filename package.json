@@ -12,7 +12,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "dev": "concurrently -k \"tsx watch src/server.ts\" \"vite --host 0.0.0.0\"",
     "start": "node dist/server.js",
-    "build:web": "vite build"
+    "build:web": "vite build",
+    "test": "node --import tsx --test test/**/*.test.ts"
   },
   "dependencies": {
     "@fastify/formbody": "^8.0.2",
