@@ -19,7 +19,6 @@ const defaultUserPassword = process.env.MCP_DEFAULT_USER_PASSWORD;
 
 if (!Number.isInteger(port) || port <= 0) throw new Error('Invalid PORT');
 if (!secretText) throw new Error('JWT_SECRET is required');
-if (!defaultUserPassword) throw new Error('MCP_DEFAULT_USER_PASSWORD is required');
 
 const secret = Buffer.from(secretText, 'base64');
 if (secret.length < 32) throw new Error('JWT_SECRET must decode to at least 32 bytes');
@@ -27,12 +26,11 @@ if (secret.length < 32) throw new Error('JWT_SECRET must decode to at least 32 b
 const storagePath = process.env.STORAGE_PATH ?? './data/app.sqlite';
 const store = new SqliteAuthStore(storagePath);
 const users = new SqliteUserStore(store.getDatabase());
-const defaultUserId = process.env.MCP_DEFAULT_USER_ID ?? randomUUID();
 const defaultUserEmail = process.env.MCP_DEFAULT_USER_EMAIL ?? 'demo@example.com';
-
-if (!users.getUser(defaultUserId)) {
+const existingDefault = users.getUserByEmail(defaultUserEmail);
+if (!existingDefault && defaultUserPassword) {
   users.createUser({
-    id: defaultUserId,
+    id: process.env.MCP_DEFAULT_USER_ID ?? randomUUID(),
     name: 'Default User',
     email: defaultUserEmail,
     passwordHash: await hash(defaultUserPassword, { algorithm: 2 }),
