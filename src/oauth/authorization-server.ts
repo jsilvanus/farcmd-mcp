@@ -19,7 +19,7 @@ function loginPage(oauth: string, error?: string): string {
     '<h1>Sign in</h1><p>Sign in to authorize this MCP client.</p>' +
     (error ? '<p class="error">' + escapeHtml(error) + '</p>' : '') +
     '<form method="post" action="/oauth/authorize">' +
-    '<input type="hidden" name="session" value="' + escapeHtml(session) + '">' +
+    '<input type="hidden" name="oauth" value="' + escapeHtml(oauth) + '">' +
     '<label for="email">Email</label><input id="email" name="email" type="email" autocomplete="username" required autofocus>' +
     '<label for="password">Password</label><input id="password" name="password" type="password" autocomplete="current-password" required>' +
     '<button type="submit">Sign in</button></form>');
@@ -29,7 +29,7 @@ function consentPage(session: string, userName: string, clientName: string): str
     '<h1>Authorize farcmd</h1><p><strong>' + escapeHtml(clientName) +
     '</strong> wants access as <strong>' + escapeHtml(userName) +
     '</strong>.</p><form method="post" action="/oauth/authorize">' +
-    '<input type="hidden" name="oauth" value="' + escapeHtml(oauth) + '">' +
+    '<input type="hidden" name="session" value="' + escapeHtml(session) + '">' +
     '<input type="hidden" name="action" value="approve">' +
     '<button type="submit">Approve</button><button class="secondary" type="submit" name="action" value="deny">Deny</button></form>');
 }
