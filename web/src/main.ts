@@ -57,7 +57,7 @@ function register() {
 }
 
 function dashboard() {
-  shell('Dashboard', '<p>Signed in as <strong>'+escapeHtml(user!.email ?? '')+'</strong>.</p><div class="cards"><article><h2>SSH Targets</h2><p>Configure later in Phase 3.</p></article><article><h2>Commands</h2><p>Configure later in Phase 4.</p></article><article><h2>OAuth Sources</h2><p>Authorization is available through MCP clients.</p></article><article><h2>History</h2><p>Execution and shell history arrive in Phase 7.</p></article></div>');
+  shell('Dashboard', '<p>Signed in as <strong>'+escapeHtml(user!.email ?? '')+'</strong>.</p><div class="cards"><article><h2>SSH Targets</h2><p>Configure SSH targets and keys.</p></article><article><h2>Commands</h2><p>Manage predefined commands.</p></article><article><h2>OAuth Sources</h2><p>Authorization is available through MCP clients.</p></article><article><h2>History</h2><p>View MCP execution history and separate human shell history.</p></article></div>');
 }
 
 async function sshPage() {
