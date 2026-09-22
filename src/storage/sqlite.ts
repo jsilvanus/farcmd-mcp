@@ -1,7 +1,6 @@
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { verify } from '@node-rs/argon2';
 import type { AuthStore, AuthorizationCodeRecord, McpUser, RefreshTokenRecord, UserStore, WebSessionRecord, WebSessionStore } from './interface.js';
 import { SqliteOAuthGrantStore } from '../oauth/grants.js';
 
@@ -10,7 +9,7 @@ export class SqliteAuthStore implements AuthStore, WebSessionStore {
   constructor(path:string){
     mkdirSync(dirname(path),{recursive:true}); this.db=new DatabaseSync(path);
     this.db.exec(
-      'CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, name TEXT NOT NULL, email TEXT UNIQUE, password_hash TEXT, execution_password_hash TEXT, created_at INTEGER NOT NULL);' +
+      'CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, name TEXT NOT NULL, email TEXT UNIQUE, password_hash TEXT, created_at INTEGER NOT NULL);' +
       'CREATE TABLE IF NOT EXISTS authorization_codes (code TEXT PRIMARY KEY, client_id TEXT NOT NULL, redirect_uri TEXT NOT NULL, challenge TEXT NOT NULL, subject TEXT NOT NULL, scope TEXT NOT NULL, expires INTEGER NOT NULL);' +
       'CREATE TABLE IF NOT EXISTS refresh_tokens (token TEXT PRIMARY KEY, client_id TEXT NOT NULL, subject TEXT NOT NULL, scope TEXT NOT NULL, expires INTEGER NOT NULL);' +
       'CREATE TABLE IF NOT EXISTS web_sessions (token TEXT PRIMARY KEY, user_id TEXT NOT NULL, expires INTEGER NOT NULL);' +
@@ -21,8 +20,7 @@ export class SqliteAuthStore implements AuthStore, WebSessionStore {
       'CREATE TABLE IF NOT EXISTS execution_history (id TEXT PRIMARY KEY,user_id TEXT NOT NULL,client_id TEXT NOT NULL,command_id TEXT NOT NULL,command_name TEXT NOT NULL,target_id TEXT NOT NULL,level INTEGER NOT NULL,started_at INTEGER NOT NULL,ended_at INTEGER NOT NULL,duration_ms INTEGER NOT NULL,exit_code INTEGER,stdout TEXT NOT NULL,stderr TEXT NOT NULL,status TEXT NOT NULL,error TEXT);' +
       'CREATE TABLE IF NOT EXISTS pending_executions (token TEXT PRIMARY KEY,user_id TEXT NOT NULL,client_id TEXT NOT NULL,command_id TEXT NOT NULL,level INTEGER NOT NULL,created_at INTEGER NOT NULL,expires_at INTEGER NOT NULL,status TEXT NOT NULL,exit_code INTEGER,stdout TEXT,stderr TEXT,duration_ms INTEGER,signal TEXT);'
     );
-    try{this.db.exec('ALTER TABLE users ADD COLUMN execution_password_hash TEXT');}catch{}
-    try{this.db.exec('ALTER TABLE commands ADD COLUMN execution_password_hash TEXT');}catch{}
+        try{this.db.exec('ALTER TABLE commands ADD COLUMN execution_password_hash TEXT');}catch{}
     try{this.db.exec('ALTER TABLE pending_executions ADD COLUMN exit_code INTEGER');}catch{}\n    try{this.db.exec('ALTER TABLE pending_executions ADD COLUMN stdout TEXT');}catch{}\n    try{this.db.exec('ALTER TABLE pending_executions ADD COLUMN stderr TEXT');}catch{}\n    try{this.db.exec('ALTER TABLE pending_executions ADD COLUMN duration_ms INTEGER');}catch{}\n    try{this.db.exec('ALTER TABLE pending_executions ADD COLUMN signal TEXT');}catch{}\n    try{this.db.exec('ALTER TABLE oauth_grants ADD COLUMN visible_levels TEXT NOT NULL DEFAULT \'\'');}catch{}
     try{this.db.exec('ALTER TABLE oauth_grants ADD COLUMN level5_permanently_hidden INTEGER NOT NULL DEFAULT 0');}catch{}
     this.db.exec('UPDATE oauth_grants SET visible_levels=allowed_levels WHERE visible_levels=\'\' AND allowed_levels<>\'\';UPDATE oauth_grants SET level5_permanently_hidden=level5_permanently_denied WHERE level5_permanently_denied=1 AND level5_permanently_hidden=0;');
@@ -45,12 +43,10 @@ export class SqliteAuthStore implements AuthStore, WebSessionStore {
 }
 export class SqliteUserStore implements UserStore {
   constructor(private readonly db:DatabaseSync){}
-  createUser(u:McpUser):void{this.db.prepare('INSERT INTO users (id,name,email,password_hash,execution_password_hash,created_at) VALUES (?,?,?,?,?,?)').run(u.id,u.name,u.email??null,u.passwordHash??null,u.executionPasswordHash??null,u.createdAt);}
+  createUser(u:McpUser):void{this.db.prepare('INSERT INTO users (id,name,email,password_hash,created_at) VALUES (?,?,?,?,?)').run(u.id,u.name,u.email??null,u.passwordHash??null,u.createdAt);}
   listUsers():McpUser[]{return (this.db.prepare('SELECT * FROM users ORDER BY name,id').all() as any[]).map(this.map);}
   getUser(id:string):McpUser|undefined{return this.map(this.db.prepare('SELECT * FROM users WHERE id=?').get(id) as any);}
   updateUser(id:string,name:string,email:string):void{this.db.prepare('UPDATE users SET name=?,email=? WHERE id=?').run(name,email,id);}
-  setExecutionPassword(id:string,passwordHash:string):void{this.db.prepare('UPDATE users SET execution_password_hash=? WHERE id=?').run(passwordHash,id);}
-  async verifyExecutionPassword(id:string,password:string):Promise<boolean>{const r=this.db.prepare('SELECT execution_password_hash FROM users WHERE id=?').get(id) as any;return !!r?.execution_password_hash&&await verify(r.execution_password_hash,password);}
   getUserByEmail(email:string):McpUser|undefined{return this.map(this.db.prepare('SELECT * FROM users WHERE lower(email)=lower(?)').get(email) as any);}
-  private map=(r:any):McpUser|undefined=>r?{id:r.id,name:r.name,...(r.email?{email:r.email}:{}),...(r.password_hash?{passwordHash:r.password_hash}:{}),...(r.execution_password_hash?{executionPasswordHash:r.execution_password_hash}:{}),createdAt:r.created_at}:undefined;
+  private map=(r:any):McpUser|undefined=>r?{id:r.id,name:r.name,...(r.email?{email:r.email}:{}),...(r.password_hash?{passwordHash:r.password_hash}:{}),createdAt:r.created_at}:undefined;
 }
