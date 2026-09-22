@@ -25,7 +25,7 @@ export function encryptSecret(plaintext: string, aad: string): string {
 export function decryptSecret(blob: string, aad: string): string {
   const parts = blob.split('.');
   if (parts.length !== 4 || parts[0] !== String(VERSION)) throw new Error('Unsupported encrypted secret');
-  const [, nonceText, tagText, ciphertextText] = parts;
+  const nonceText = parts[1]!; const tagText = parts[2]!; const ciphertextText = parts[3]!;
   const decipher = createDecipheriv('aes-256-gcm', masterKey(), Buffer.from(nonceText, 'base64url'));
   decipher.setAAD(Buffer.from(aad, 'utf8'));
   decipher.setAuthTag(Buffer.from(tagText, 'base64url'));
