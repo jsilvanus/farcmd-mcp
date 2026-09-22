@@ -96,3 +96,16 @@ openssl rand -base64 32
 The SSH private-key passphrase, when one exists, is never persisted by farcmd-mcp. The web UI unlocks a key for a short in-memory session (15 minutes), after which the passphrase must be entered again. Host fingerprints are verified during connection tests; an unknown host is not silently trusted.
 
 Never commit `FARCMD_ENCRYPTION_KEY`, SSH private keys, or passphrases.
+
+
+## Command registry
+
+Commands are predefined SSH capabilities owned by a user. Each command has a human-assigned level from 1 to 5:
+
+1. Safe/read-only operations
+2. Low-impact operations
+3. Normal mutating operations
+4. High-impact operations
+5. Dangerous/destructive operations
+
+The exact shell command is stored server-side and is visible in the authenticated human web UI. It is intentionally not part of MCP discovery. Phase 4 provides the registry and management UI; MCP discovery and execution are implemented in Phase 5.
