@@ -161,9 +161,9 @@ Implement:
 - connection test from the web UI
 - clear errors and connection timeouts
 
-Do not expose private keys, decrypted credentials, or host configuration through MCP.
+Implemented in V1 with AES-256-GCM credential encryption, an environment-provided 32-byte master key, session-only SSH passphrases with a 15-minute in-memory unlock TTL, SSH target CRUD, host-fingerprint-aware connection tests, and a dedicated web unlock flow. Do not expose private keys, decrypted credentials, or host configuration through MCP.
 
-**Deliverable:** a user can securely configure and verify an SSH target.
+**Deliverable:** a user can securely configure and verify an SSH target. Phase 3 is complete; command execution remains intentionally deferred to Phases 4–5.
 
 ---
 
