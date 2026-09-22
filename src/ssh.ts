@@ -4,7 +4,9 @@ import { createHash } from 'node:crypto';
 export interface SshKeyMaterial { privateKey: string; passphrase?: string; }
 export interface SshTargetConfig { hostname:string; port:number; username:string; hostFingerprint?:string; }
 export interface SshTestResult { ok:boolean; fingerprint?:string; error?:string; }
-export interface SshExecResult { exitCode:number|null; signal?:string; stdout:string; stderr:string; durationMs:number; truncated?:boolean; }\nconst MAX_OUTPUT_BYTES=Number(process.env.FARCMD_MAX_OUTPUT_BYTES??'262144');\nif(!Number.isSafeInteger(MAX_OUTPUT_BYTES)||MAX_OUTPUT_BYTES<4096||MAX_OUTPUT_BYTES>10_485_760)throw new Error('FARCMD_MAX_OUTPUT_BYTES must be 4096-10485760');
+export interface SshExecResult { exitCode:number|null; signal?:string; stdout:string; stderr:string; durationMs:number; truncated?:boolean; }
+const MAX_OUTPUT_BYTES=Number(process.env.FARCMD_MAX_OUTPUT_BYTES??'262144');
+if(!Number.isSafeInteger(MAX_OUTPUT_BYTES)||MAX_OUTPUT_BYTES<4096||MAX_OUTPUT_BYTES>10_485_760)throw new Error('FARCMD_MAX_OUTPUT_BYTES must be 4096-10485760');
 
 function privateKeyFingerprint(privateKey:string, passphrase?:string):string|undefined {
   const parsed=utils.parseKey(privateKey,passphrase);
