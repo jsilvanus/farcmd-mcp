@@ -37,3 +37,15 @@ export interface UserStore {
   getUser(id: string): McpUser | undefined;
   getUserByEmail(email: string): McpUser | undefined;
 }
+
+export interface WebSessionRecord {
+  token: string;
+  userId: string;
+  expires: number;
+}
+
+export interface WebSessionStore {
+  saveWebSession(record: WebSessionRecord): void;
+  getWebSession(token: string): WebSessionRecord | undefined;
+  deleteWebSession(token: string): void;
+}
