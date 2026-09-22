@@ -3,6 +3,8 @@ import { verify } from '@node-rs/argon2';
 import type { AuthStore, UserStore } from '../storage/interface.js';
 import { fetchCimdMetadata, isCimdClientId } from './cimd.js';
 import { randomToken, verifyS256 } from './pkce.js';
+
+const loginSessions = new Map<string, { userId: string; oauth: string; expires: number }>();
 import { issueAccessToken } from './jwt.js';
 
 function escapeHtml(value: string): string {
@@ -17,12 +19,12 @@ function loginPage(oauth: string, error?: string): string {
     '<h1>Sign in</h1><p>Sign in to authorize this MCP client.</p>' +
     (error ? '<p class="error">' + escapeHtml(error) + '</p>' : '') +
     '<form method="post" action="/oauth/authorize">' +
-    '<input type="hidden" name="oauth" value="' + escapeHtml(oauth) + '">' +
+    '<input type="hidden" name="session" value="' + escapeHtml(session) + '">' +
     '<label for="email">Email</label><input id="email" name="email" type="email" autocomplete="username" required autofocus>' +
     '<label for="password">Password</label><input id="password" name="password" type="password" autocomplete="current-password" required>' +
     '<button type="submit">Sign in</button></form>');
 }
-function consentPage(oauth: string, userName: string, clientName: string): string {
+function consentPage(session: string, userName: string, clientName: string): string {
   return page('Authorize farcmd',
     '<h1>Authorize farcmd</h1><p><strong>' + escapeHtml(clientName) +
     '</strong> wants access as <strong>' + escapeHtml(userName) +
@@ -64,25 +66,51 @@ export async function mountAuthorizationServer(
 
   app.post('/oauth/authorize', async (request, reply) => {
     const body = request.body as Record<string,string|undefined>;
-    if (!body.oauth || !body.email || !body.password) {
+    if (!body.oauth && !body.session) {
       return reply.code(400).type('text/html').send(page('Login required','<h1>Login required</h1>'));
     }
 
     let q: Record<string,string|undefined>;
     let metadata: Awaited<ReturnType<typeof validateRequest>>;
+    let userId: string;
+
     try {
-      q = decodeOAuth(body.oauth);
+      if (body.session) {
+        const session = loginSessions.get(body.session);
+        if (!session || session.expires < Date.now()) throw new Error('Expired login session');
+        q = decodeOAuth(session.oauth);
+        userId = session.userId;
+      } else {
+        q = decodeOAuth(body.oauth!);
+        if (!body.email || !body.password) throw new Error('Login required');
+        const user = users.getUserByEmail(body.email);
+        if (!user?.passwordHash || !(await verify(user.passwordHash, body.password))) {
+          return reply.code(401).type('text/html').send(loginPage(body.oauth!, 'Invalid email or password.'));
+        }
+        userId = user.id;
+      }
       metadata = await validateRequest(q);
     } catch {
       return reply.code(400).type('text/html').send(page('Invalid request','<h1>Invalid authorization request</h1>'));
     }
 
-    const user = users.getUserByEmail(body.email);
-    if (!user?.passwordHash || !(await verify(user.passwordHash, body.password))) {
-      return reply.code(401).type('text/html').send(loginPage(body.oauth, 'Invalid email or password.'));
+    const user = users.getUser(userId);
+    if (!user) return reply.code(401).type('text/html').send(page('Invalid account','<h1>Invalid account</h1>'));
+
+    if (body.action === undefined) {
+      const session = randomToken();
+      loginSessions.set(session, {
+        userId: user.id,
+        oauth: body.oauth ?? loginSessions.get(body.session!)!.oauth,
+        expires: Date.now() + 5 * 60_000,
+      });
+      return reply.type('text/html').send(consentPage(session, user.name, metadata.client_name));
     }
 
-    if (body.action === undefined) return reply.type('text/html').send(consentPage(body.oauth, user.name, metadata.client_name));
+    if (!body.session) return reply.code(400).type('text/html').send(page('Invalid session','<h1>Invalid authorization session</h1>'));
+    const session = loginSessions.get(body.session);
+    if (!session || session.expires < Date.now()) return reply.code(400).type('text/html').send(page('Expired session','<h1>Authorization session expired</h1>'));
+    loginSessions.delete(body.session);
 
     if (body.action !== 'approve') {
       const target = new URL(q.redirect_uri!);
