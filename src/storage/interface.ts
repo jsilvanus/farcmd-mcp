@@ -36,6 +36,7 @@ export interface UserStore {
   listUsers(): McpUser[];
   getUser(id: string): McpUser | undefined;
   getUserByEmail(email: string): McpUser | undefined;
+  updateUser(id:string,name:string,email:string): void;
 }
 
 export interface WebSessionRecord {
