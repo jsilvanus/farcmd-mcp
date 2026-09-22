@@ -299,50 +299,52 @@ After human confirmation, the MCP client can call the same level-specific tool a
 
 ## Phase 7 — Execution history and human shell history
 
-Implement the two intentionally separate histories.
+Implemented.
 
 ### MCP execution history
 
-Store:
+Every actual SSH command execution is recorded with:
 
 - execution ID
-- user ID
+- user
 - OAuth client/source
-- command ID
-- target ID
+- command ID and human-visible command name
+- SSH target ID
 - level
 - start/end time
 - duration
 - exit code
-- stdout
-- stderr
-- status
-- error information where appropriate
+- stdout/stderr
+- success/failed/timeout status
+- error information where available
 
-The execution result is returned directly to the MCP caller.
+The stored record deliberately does **not** contain the exact shell command.
 
-The AI therefore sees what **its own command produced**, without seeing the underlying shell command.
-
-The web UI provides searchable/filterable execution history.
+The web UI provides searchable and filterable MCP execution history.
 
 ### Human shell history
 
-Implement separately as a human administration feature.
+The web UI also provides a separate human-only remote shell history view.
 
-The shell-history feature may retrieve the relevant remote shell history from an SSH target, but it must:
+It:
 
-- require explicit human access
-- never be included in normal `list_commands`
-- never be returned automatically to MCP
-- support redaction
-- support retention limits
-- clearly distinguish remote shell history from MCP executions
+- requires an authenticated browser session
+- retrieves recent `.bash_history` and `.zsh_history` entries through the configured SSH target
+- applies basic secret redaction before displaying the result
+- never exposes shell history through MCP discovery or execution tools
+- clearly labels shell history as separate from MCP execution history
 
-Treat shell history as potentially sensitive because humans may have entered passwords, tokens, API keys, URLs with credentials, or unrelated private commands.
+Remote shell history is not automatically persisted by farcmd. This avoids creating a second durable copy of potentially sensitive human command history; the retention policy therefore remains the remote shell's responsibility in V1.
 
-**Deliverable:** AI execution context and human server history remain cleanly separated.
+The security boundary is:
 
----
+`MCP execution → execution_history`
+
+and separately:
+
+`Human UI → remote shell history`
+
+**Deliverable:** AI execution context and human server history remain cleanly separated. Phase 7 is implemented.
 
 ## Phase 8 — Security hardening, audit, and operational controls
 
