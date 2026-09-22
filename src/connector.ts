@@ -28,6 +28,7 @@ export class FarcmdConnectorImpl implements FarcmdConnector {
     this.ssh=new SqliteSshStore(db); this.commands=new SqliteCommandStore(db); this.grants=new SqliteOAuthGrantStore(db); this.pending=new SqliteExecutionStore(db); this.pending.cleanup(); this.history=new SqliteExecutionHistoryStore(db);
   }
   async health(_context:ConnectorContext):Promise<{ok:true}>{return {ok:true};}
+  visibleLevels(context:ConnectorContext):CommandLevel[]{const grant=this.grants.get(context.userId,context.clientId);return grant&&!grant.revokedAt?[...grant.visibleLevels]:[];}
   async listCommands(context:ConnectorContext):Promise<CommandSummary[]>{
     const grant=this.grants.get(context.userId,context.clientId);
     if(!grant||grant.revokedAt)return [];
