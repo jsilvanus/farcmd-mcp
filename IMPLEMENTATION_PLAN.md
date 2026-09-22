@@ -250,7 +250,7 @@ The internal path verifies:
 
 Only then is the stored command sent to SSH.
 
-**Deliverable:** an MCP client can discover and execute predefined commands without ever learning their shell implementations.
+**Deliverable:** an MCP client can discover and execute predefined commands without ever learning their shell implementations. Phase 5 is implemented: MCP exposes metadata-only command discovery plus five level-specific execution tools, with one server-side execution path enforcing ownership, enabled state, exact level matching, target/key checks, pinned host identity, and SSH-key unlock requirements. OAuth level grants remain wired for Phase 6.
 
 ---
 
