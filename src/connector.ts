@@ -4,6 +4,7 @@ import { getSshPassphrase } from './ssh-key-cache.js';
 import { executeSshCommand } from './ssh.js';
 import { SqliteSshStore } from './storage/ssh.js';
 import { SqliteCommandStore, type CommandLevel } from './command-registry.js';
+import { SqliteOAuthGrantStore } from './oauth/grants.js';
 
 export interface ConnectorContext { userId:string; clientId:string; accessToken:string; allowedLevels?:CommandLevel[]; }
 export interface CommandSummary { id:string; name:string; description:string; level:CommandLevel; enabled:boolean; }
@@ -20,15 +21,19 @@ export interface FarcmdConnector {
 export class FarcmdConnectorImpl implements FarcmdConnector {
   private readonly ssh:SqliteSshStore;
   private readonly commands:SqliteCommandStore;
+  private readonly grants:SqliteOAuthGrantStore;
   constructor(private readonly db:DatabaseSync,private readonly publicUrl:string){
-    this.ssh=new SqliteSshStore(db); this.commands=new SqliteCommandStore(db);
+    this.ssh=new SqliteSshStore(db); this.commands=new SqliteCommandStore(db); this.grants=new SqliteOAuthGrantStore(db);
   }
   async health(_context:ConnectorContext):Promise<{ok:true}>{return {ok:true};}
   async listCommands(context:ConnectorContext):Promise<CommandSummary[]>{
     return this.commands.list(context.userId).map(c=>({id:c.id,name:c.name,description:c.description,level:c.level,enabled:c.enabled}));
   }
   async executeCommand(context:ConnectorContext,commandId:string,expectedLevel:CommandLevel):Promise<CommandExecution|UnlockRequired>{
-    if(context.allowedLevels && !context.allowedLevels.includes(expectedLevel)) throw new Error('This OAuth authorization does not permit the requested command level.');
+    const grant=this.grants.get(context.userId,context.clientId);
+    if(!grant || grant.revokedAt) throw new Error('This OAuth authorization has been revoked or does not exist.');
+    if(!grant.allowedLevels.includes(expectedLevel)) throw new Error('This OAuth authorization does not permit the requested command level.');
+    this.grants.touch(context.userId,context.clientId);
     const command=this.commands.get(context.userId,commandId);
     if(!command)throw new Error('Command not found.');
     if(!command.enabled)throw new Error('Command is disabled.');
