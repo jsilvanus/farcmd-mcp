@@ -2,6 +2,7 @@ import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import type { AuthStore, AuthorizationCodeRecord, McpUser, RefreshTokenRecord, UserStore, WebSessionRecord, WebSessionStore } from './interface.js';
+import { SqliteOAuthGrantStore } from '../oauth/grants.js';
 
 export class SqliteAuthStore implements AuthStore, WebSessionStore {
   private readonly db: DatabaseSync;
@@ -14,10 +15,18 @@ export class SqliteAuthStore implements AuthStore, WebSessionStore {
       'CREATE TABLE IF NOT EXISTS refresh_tokens (token TEXT PRIMARY KEY, client_id TEXT NOT NULL, subject TEXT NOT NULL, scope TEXT NOT NULL, expires INTEGER NOT NULL);' +
       'CREATE TABLE IF NOT EXISTS web_sessions (token TEXT PRIMARY KEY, user_id TEXT NOT NULL, expires INTEGER NOT NULL);' +
       'CREATE TABLE IF NOT EXISTS ssh_keys (id TEXT PRIMARY KEY,user_id TEXT NOT NULL,name TEXT NOT NULL,encrypted_private_key TEXT NOT NULL,fingerprint TEXT,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL);' +
-      'CREATE TABLE IF NOT EXISTS ssh_targets (id TEXT PRIMARY KEY,user_id TEXT NOT NULL,name TEXT NOT NULL,hostname TEXT NOT NULL,port INTEGER NOT NULL,username TEXT NOT NULL,ssh_key_id TEXT NOT NULL,host_fingerprint TEXT,enabled INTEGER NOT NULL DEFAULT 1,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL);' + 'CREATE TABLE IF NOT EXISTS commands (id TEXT PRIMARY KEY,user_id TEXT NOT NULL,target_id TEXT NOT NULL,name TEXT NOT NULL,description TEXT NOT NULL,shell_command TEXT NOT NULL,level INTEGER NOT NULL CHECK(level BETWEEN 1 AND 5),enabled INTEGER NOT NULL DEFAULT 1,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL);'
+      'CREATE TABLE IF NOT EXISTS ssh_targets (id TEXT PRIMARY KEY,user_id TEXT NOT NULL,name TEXT NOT NULL,hostname TEXT NOT NULL,port INTEGER NOT NULL,username TEXT NOT NULL,ssh_key_id TEXT NOT NULL,host_fingerprint TEXT,enabled INTEGER NOT NULL DEFAULT 1,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL);' + 'CREATE TABLE IF NOT EXISTS commands (id TEXT PRIMARY KEY,user_id TEXT NOT NULL,target_id TEXT NOT NULL,name TEXT NOT NULL,description TEXT NOT NULL,shell_command TEXT NOT NULL,level INTEGER NOT NULL CHECK(level BETWEEN 1 AND 5),enabled INTEGER NOT NULL DEFAULT 1,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL);' +
+      'CREATE TABLE IF NOT EXISTS oauth_grants (user_id TEXT NOT NULL,client_id TEXT NOT NULL,client_name TEXT NOT NULL,allowed_levels TEXT NOT NULL,level5_permanently_denied INTEGER NOT NULL DEFAULT 0,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL,revoked_at INTEGER,last_used_at INTEGER,PRIMARY KEY(user_id,client_id));'
     );
   }
   getDatabase():DatabaseSync{return this.db;}
+  private grants():SqliteOAuthGrantStore{return new SqliteOAuthGrantStore(this.db);}
+  getOAuthGrant(userId:string,clientId:string){return this.grants().get(userId,clientId);}
+  upsertOAuthGrant(userId:string,clientId:string,clientName:string,allowedLevels:number[],level5PermanentlyDenied:boolean){this.grants().upsert(userId,clientId,clientName,allowedLevels as any,level5PermanentlyDenied);}
+  revokeOAuthGrant(userId:string,clientId:string){this.grants().revoke(userId,clientId);}
+  updateOAuthGrant(userId:string,clientId:string,allowedLevels:number[],level5PermanentlyDenied:boolean){this.grants().update(userId,clientId,allowedLevels as any,level5PermanentlyDenied);}
+  listOAuthGrants(userId:string){return this.grants().list(userId);}
+  touchOAuthGrant(userId:string,clientId:string){this.grants().touch(userId,clientId);}
   saveAuthorizationCode(r:AuthorizationCodeRecord):void{this.db.prepare('INSERT INTO authorization_codes (code,client_id,redirect_uri,challenge,subject,scope,expires) VALUES (?,?,?,?,?,?,?)').run(r.code,r.clientId,r.redirectUri,r.challenge,r.subject,r.scope,r.expires);}
   consumeAuthorizationCode(code:string):AuthorizationCodeRecord|undefined{
     const r=this.db.prepare('SELECT code,client_id,redirect_uri,challenge,subject,scope,expires FROM authorization_codes WHERE code=?').get(code) as any;
