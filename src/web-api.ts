@@ -9,7 +9,10 @@ import { executeSshCommand } from './ssh.js';
 
 const attempts=new Map<string,{count:number;reset:number}>();
 const MAX_ATTEMPTS=8;
-const WINDOW=15*60_000;\nconst confirmationAttempts=new Map<string,{count:number;reset:number}>();\nfunction confirmationRateLimit(key:string):boolean{return rateLimitMap(confirmationAttempts,key,5,15*60_000);}\nfunction rateLimitMap(map:Map<string,{count:number;reset:number}>,key:string,max:number,window:number):boolean{const now=Date.now();const current=map.get(key);if(!current||current.reset<=now){map.set(key,{count:1,reset:now+window});return true;}current.count++;return current.count<=max;}
+const WINDOW=15*60_000;
+const confirmationAttempts=new Map<string,{count:number;reset:number}>();
+function confirmationRateLimit(key:string):boolean{return rateLimitMap(confirmationAttempts,key,5,15*60_000);}
+function rateLimitMap(map:Map<string,{count:number;reset:number}>,key:string,max:number,window:number):boolean{const now=Date.now();const current=map.get(key);if(!current||current.reset<=now){map.set(key,{count:1,reset:now+window});return true;}current.count++;return current.count<=max;}
 
 function rateLimit(key:string): boolean {
   const now=Date.now(); const current=attempts.get(key);
@@ -109,7 +112,8 @@ export async function mountWebApi(app:FastifyInstance, users:UserStore, sessionS
   app.patch('/api/commands/:id',async(request,reply)=>{const user=await requireUser(request,reply,users,sessions);if(!user)return;const id=(request.params as {id:string}).id;const cur=commands.get(user.id,id);if(!cur)return reply.code(404).send({error:'Command not found'});const b=request.body as Record<string,unknown>;const next={...cur,name:typeof b.name==='string'?b.name.trim():cur.name,description:typeof b.description==='string'?b.description.trim():cur.description,shellCommand:typeof b.shellCommand==='string'?b.shellCommand.trim():cur.shellCommand,targetId:typeof b.targetId==='string'?b.targetId:cur.targetId,level:b.level===undefined?cur.level:(typeof b.level==='number'?b.level:Number(b.level)),enabled:typeof b.enabled==='boolean'?b.enabled:cur.enabled,updatedAt:Date.now()};if(!next.name||next.name.length>120||next.description.length>2000||!next.shellCommand||next.shellCommand.length>10000||!isCommandLevel(next.level)||!ssh.getTarget(user.id,next.targetId))return reply.code(400).send({error:'Invalid command data'});if(cur.level===5&&(next.level!==5||next.shellCommand!==cur.shellCommand||next.targetId!==cur.targetId))commands.clearExecutionPassword(user.id,id);commands.update(next);return {command:commands.get(user.id,id)};});
   app.delete('/api/commands/:id',async(request,reply)=>{const user=await requireUser(request,reply,users,sessions);if(!user)return;const id=(request.params as {id:string}).id;if(!commands.get(user.id,id))return reply.code(404).send({error:'Command not found'});commands.delete(user.id,id);return {ok:true};});
   app.post('/api/commands/:id/execution-password',async(request,reply)=>{const user=await requireUser(request,reply,users,sessions);if(!user)return;const id=(request.params as {id:string}).id;const command=commands.get(user.id,id);if(!command)return reply.code(404).send({error:'Command not found'});if(command.level!==5)return reply.code(400).send({error:'Only level 5 commands have execution passwords'});const b=request.body as Record<string,unknown>;const password=typeof b.password==='string'?b.password:'';if(password.length<12||password.length>1024)return reply.code(400).send({error:'Execution password must be 12-1024 characters'});commands.setExecutionPassword(user.id,id,await hash(password,{algorithm:2}));return {ok:true};});
-  app.get('/api/history/command-counts',async(request,reply)=>{const user=await requireUser(request,reply,users,sessions);if(!user)return;return {counts:executionHistory.successfulCounts(user.id)};});\n  app.get('/api/history/executions',async(request,reply)=>{
+  app.get('/api/history/command-counts',async(request,reply)=>{const user=await requireUser(request,reply,users,sessions);if(!user)return;return {counts:executionHistory.successfulCounts(user.id)};});
+  app.get('/api/history/executions',async(request,reply)=>{
     const user=await requireUser(request,reply,users,sessions);if(!user)return;
     const q=request.query as Record<string,string|undefined>;
     const level=q.level?Number(q.level):undefined;
@@ -124,12 +128,10 @@ export async function mountWebApi(app:FastifyInstance, users:UserStore, sessionS
     const key=ssh.getKey(user.id,target.sshKeyId);if(!key)return reply.code(404).send({error:'SSH key not found'});
     const passphrase=getSshPassphrase(user.id,key.id);let privateKey:string;
     try{privateKey=decryptSecret(key.encryptedPrivateKey,'ssh-key:'+user.id+':'+key.id);}catch{return reply.code(500).send({error:'Unable to decrypt SSH key'});}
-    const command="printf '
---- .bash_history ---
-'; tail -n 500 ~/.bash_history 2>/dev/null; printf '
---- .zsh_history ---
-'; tail -n 500 ~/.zsh_history 2>/dev/null";
-    if(!target.enabled)return reply.code(400).send({error:'SSH target is disabled'});\n    if(!target.hostFingerprint)return reply.code(400).send({error:'SSH target has no pinned host fingerprint'});\n    const result=await executeSshCommand({hostname:target.hostname,port:target.port,username:target.username,...(target.hostFingerprint?{hostFingerprint:target.hostFingerprint}: {})},{privateKey,...(passphrase!==undefined?{passphrase}:{})},command,15000);
+    const command="printf '\\n--- .bash_history ---\\n'; tail -n 500 ~/.bash_history 2>/dev/null; printf '\\n--- .zsh_history ---\\n'; tail -n 500 ~/.zsh_history 2>/dev/null";
+    if(!target.enabled)return reply.code(400).send({error:'SSH target is disabled'});
+    if(!target.hostFingerprint)return reply.code(400).send({error:'SSH target has no pinned host fingerprint'});
+    const result=await executeSshCommand({hostname:target.hostname,port:target.port,username:target.username,...(target.hostFingerprint?{hostFingerprint:target.hostFingerprint}: {})},{privateKey,...(passphrase!==undefined?{passphrase}:{})},command,15000);
     const redacted=result.stdout.replace(/(?:password|passwd|token|secret|api[_-]?key)\\s*[=:]\\s*[^\\s]+/gi,'$1=[REDACTED]').replace(/(https?:\\/\\/[^\\s:@]+:)[^\\s@]+@/gi,'$1[REDACTED]@');
     return {target:{id:target.id,name:target.name},stdout:redacted,stderr:result.stderr,exitCode:result.exitCode,durationMs:result.durationMs,warning:'Remote shell history is human-only and may contain sensitive or unrelated commands. It is not MCP execution history.'};
   });
