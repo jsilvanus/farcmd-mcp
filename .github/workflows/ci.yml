@@ -6,8 +6,25 @@ on:
   pull_request:
 
 jobs:
-  typecheck:
+  test:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [22]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+      - run: npm install
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+  security-checks:
+    runs-on: ubuntu-latest
+    needs: test
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -15,5 +32,4 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm install
-      - run: npm run typecheck
-      - run: npm run build
+      - run: npm audit --audit-level=high
