@@ -12,7 +12,7 @@ import { randomToken } from './oauth/pkce.js';
 export interface ConnectorContext { userId:string; clientId:string; accessToken:string; }
 export interface CommandSummary { id:string; name:string; description:string; level:CommandLevel; enabled:boolean; confirmation:ConfirmationRequirement; }
 export interface CommandExecution { ok:true; commandId:string; level:CommandLevel; exitCode:number|null; stdout:string; stderr:string; durationMs:number; signal?:string; }
-export interface PendingConfirmation {ok:true;pending:true;commandId:string;level:CommandLevel;confirmation:ConfirmationRequirement;approvalUrl:string;expiresAt:number;}
+export interface PendingConfirmation {ok:true;pending:true;commandId:string;level:CommandLevel;confirmation:ConfirmationRequirement;approvalUrl:string;confirmationToken:string;expiresAt:number;}
 export interface FarcmdConnector {
   health(context:ConnectorContext):Promise<{ok:true}>;
   listCommands(context:ConnectorContext):Promise<CommandSummary[]>;
@@ -31,7 +31,7 @@ export class FarcmdConnectorImpl implements FarcmdConnector {
     if(!grant||grant.revokedAt)return [];
     return this.commands.list(context.userId).filter(c=>c.enabled&&grant.visibleLevels.includes(c.level)).map(c=>({id:c.id,name:c.name,description:c.description,level:c.level,enabled:c.enabled,confirmation:confirmationForLevel(c.level)}));
   }
-  async executeCommand(context:ConnectorContext,commandId:string,expectedLevel:CommandLevel):Promise<CommandExecution|PendingConfirmation>{
+  async executeCommand(context:ConnectorContext,commandId:string,expectedLevel:CommandLevel,confirmationToken?:string):Promise<CommandExecution|PendingConfirmation>{
     const grant=this.grants.get(context.userId,context.clientId);
     if(!grant||grant.revokedAt)throw new Error('This OAuth authorization has been revoked or does not exist.');
     const command=this.commands.get(context.userId,commandId);
@@ -42,9 +42,11 @@ export class FarcmdConnectorImpl implements FarcmdConnector {
     this.grants.touch(context.userId,context.clientId);
     const confirmation=confirmationForLevel(command.level);
     if(confirmation!=='none'){
+      if(confirmationToken){ const pending=this.pending.get(confirmationToken); if(!pending||pending.userId!==context.userId||pending.clientId!==context.clientId||pending.commandId!==commandId||pending.level!==command.level)throw new Error('Confirmation request not found or expired.'); if(pending.status==='completed'){const completed=this.pending.consumeCompleted(confirmationToken);if(!completed)throw new Error('Confirmation result is no longer available.');return {ok:true,commandId,level:command.level,...completed};} return {ok:true,pending:true,commandId,level:command.level,confirmation,approvalUrl:this.publicUrl+'/?page=confirm&token='+encodeURIComponent(confirmationToken),confirmationToken,expiresAt:pending.expiresAt}; }
+
       const token=randomToken(); const now=Date.now(); const expiresAt=now+5*60_000;
       this.pending.create({token,userId:context.userId,clientId:context.clientId,commandId,level:command.level,createdAt:now,expiresAt});
-      return {ok:true,pending:true,commandId,level:command.level,confirmation,approvalUrl:this.publicUrl+'/?page=confirm&token='+encodeURIComponent(token),expiresAt};
+      return {ok:true,pending:true,commandId,level:command.level,confirmation,approvalUrl:this.publicUrl+'/?page=confirm&token='+encodeURIComponent(token),confirmationToken:token,expiresAt};
     }
     return this.executeStoredCommand(context.userId,commandId,command.level);
   }
@@ -58,7 +60,7 @@ export class FarcmdConnectorImpl implements FarcmdConnector {
       if(!await this.users.verifyExecutionPassword(userId,password))throw new Error('Invalid execution password.');
     }
     this.pending.consume(token);
-    return this.executeStoredCommand(p.userId,p.commandId,p.level);
+    const result=await this.executeStoredCommand(p.userId,p.commandId,p.level); this.pending.complete(token,{exitCode:result.exitCode,stdout:result.stdout,stderr:result.stderr,durationMs:result.durationMs,...(result.signal?{signal:result.signal}:{})}); return result;
   }
   private async executeStoredCommand(userId:string,commandId:string,level:CommandLevel):Promise<CommandExecution>{
     const command=this.commands.get(userId,commandId); if(!command||!command.enabled||command.level!==level)throw new Error('Command is no longer available.');
