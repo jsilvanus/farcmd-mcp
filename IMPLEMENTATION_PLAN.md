@@ -201,7 +201,7 @@ The exact command is visible to the owner in the web UI, but never returned by a
 
 V1 deliberately uses **fixed commands without AI-provided arguments**.
 
-**Deliverable:** a user can build a private registry of safe, predefined SSH operations.
+**Deliverable:** a user can build a private registry of safe, predefined SSH operations. Phase 4 is implemented: commands are persisted with levels 1–5, bound to user-owned SSH targets, editable/enabled/disabled/deletable through the web UI, and the exact shell command is exposed only to the authenticated human UI. MCP exposure and execution remain deferred to Phase 5.
 
 ---
 
