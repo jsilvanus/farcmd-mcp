@@ -4,7 +4,7 @@ import cookie from '@fastify/cookie';
 import fastifyStatic from '@fastify/static';
 import { join } from 'node:path';
 import { hash } from '@node-rs/argon2';
-import { randomBytes, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { FarcmdConnectorImpl } from './connector.js';
 import { mountMcpHttp } from './mcp/http.js';
 import { mountOAuthMetadata } from './oauth-metadata.js';
@@ -16,6 +16,10 @@ const port = Number(process.env.PORT ?? '5999');
 const publicUrl = process.env.MCP_PUBLIC_URL ?? ('http://localhost:' + port);
 const secretText = process.env.JWT_SECRET;
 const defaultUserPassword = process.env.MCP_DEFAULT_USER_PASSWORD;
+if (process.env.FARCMD_ENCRYPTION_KEY) {
+  const key = Buffer.from(process.env.FARCMD_ENCRYPTION_KEY, 'base64');
+  if (key.length !== 32) throw new Error('FARCMD_ENCRYPTION_KEY must decode to exactly 32 bytes');
+}
 
 if (!Number.isInteger(port) || port <= 0) throw new Error('Invalid PORT');
 if (!secretText) throw new Error('JWT_SECRET is required');
