@@ -17,7 +17,7 @@ export interface FarcmdConnector {
   health(context:ConnectorContext):Promise<{ok:true}>;
   listCommands(context:ConnectorContext):Promise<CommandSummary[]>;
   visibleLevels(context:ConnectorContext):CommandLevel[];
-  executeCommand(context:ConnectorContext,commandId:string,expectedLevel:CommandLevel):Promise<CommandExecution|PendingConfirmation>;
+  executeCommand(context:ConnectorContext,commandId:string,expectedLevel:CommandLevel,confirmationToken?:string):Promise<CommandExecution|PendingConfirmation>;
   approvePending(userId:string,token:string,password?:string):Promise<CommandExecution>;
 }
 
