@@ -21,6 +21,12 @@ function publicUser(user:{id:string;name:string;email?:string;createdAt:number})
 function cookieOptions() {
   return {httpOnly:true,secure:process.env.NODE_ENV==='production',sameSite:'lax' as const,path:'/',maxAge:7*24*60*60};
 }
+function checkMutationOrigin(request:FastifyRequest): boolean {
+  const origin=request.headers.origin;
+  if (!origin) return true;
+  const expected=process.env.MCP_PUBLIC_URL ?? `http://localhost:${process.env.PORT ?? '5999'}`;
+  try { return new URL(origin).origin===new URL(expected).origin; } catch { return false; }
+}
 function sessionFrom(request:FastifyRequest, sessions:WebSessionService) {
   const token=request.cookies.farcmd_session;
   return token ? sessions.get(token) : undefined;
@@ -34,6 +40,11 @@ async function requireUser(request:FastifyRequest, reply:FastifyReply, users:Use
 }
 
 export async function mountWebApi(app:FastifyInstance, users:UserStore, sessionStore:WebSessionStore): Promise<void> {
+  app.addHook('preHandler', async (request,reply) => {
+    if (['POST','PATCH','PUT','DELETE'].includes(request.method) && request.url.startsWith('/api/') && !checkMutationOrigin(request)) {
+      return reply.code(403).send({error:'Invalid request origin'});
+    }
+  });
   const sessions=new WebSessionService(sessionStore);
   app.get('/api/auth/session',async (request,reply)=>{
     const user=await requireUser(request,reply,users,sessions); if(!user)return;
