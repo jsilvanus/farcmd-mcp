@@ -7,9 +7,11 @@ import type {
   McpUser,
   RefreshTokenRecord,
   UserStore,
+  WebSessionRecord,
+  WebSessionStore,
 } from './interface.js';
 
-export class SqliteAuthStore implements AuthStore {
+export class SqliteAuthStore implements AuthStore, WebSessionStore {
   private readonly db: DatabaseSync;
 
   constructor(path: string) {
@@ -18,7 +20,8 @@ export class SqliteAuthStore implements AuthStore {
     this.db.exec(
       'CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, name TEXT NOT NULL, email TEXT UNIQUE, password_hash TEXT, created_at INTEGER NOT NULL);' +
       'CREATE TABLE IF NOT EXISTS authorization_codes (code TEXT PRIMARY KEY, client_id TEXT NOT NULL, redirect_uri TEXT NOT NULL, challenge TEXT NOT NULL, subject TEXT NOT NULL, scope TEXT NOT NULL, expires INTEGER NOT NULL);' +
-      'CREATE TABLE IF NOT EXISTS refresh_tokens (token TEXT PRIMARY KEY, client_id TEXT NOT NULL, subject TEXT NOT NULL, scope TEXT NOT NULL, expires INTEGER NOT NULL);'
+      'CREATE TABLE IF NOT EXISTS refresh_tokens (token TEXT PRIMARY KEY, client_id TEXT NOT NULL, subject TEXT NOT NULL, scope TEXT NOT NULL, expires INTEGER NOT NULL);' +
+      'CREATE TABLE IF NOT EXISTS web_sessions (token TEXT PRIMARY KEY, user_id TEXT NOT NULL, expires INTEGER NOT NULL);'
     );
   }
 
@@ -49,6 +52,19 @@ export class SqliteAuthStore implements AuthStore {
     this.db.prepare(
       'INSERT INTO refresh_tokens (token, client_id, subject, scope, expires) VALUES (?, ?, ?, ?, ?)'
     ).run(record.token, record.clientId, record.subject, record.scope, record.expires);
+  }
+
+  saveWebSession(record: WebSessionRecord): void {
+    this.db.prepare('INSERT INTO web_sessions (token, user_id, expires) VALUES (?, ?, ?)').run(record.token, record.userId, record.expires);
+  }
+
+  getWebSession(token: string): WebSessionRecord | undefined {
+    const row=this.db.prepare('SELECT token,user_id,expires FROM web_sessions WHERE token=?').get(token) as {token:string;user_id:string;expires:number}|undefined;
+    return row ? {token:row.token,userId:row.user_id,expires:row.expires} : undefined;
+  }
+
+  deleteWebSession(token: string): void {
+    this.db.prepare('DELETE FROM web_sessions WHERE token=?').run(token);
   }
 
   getRefreshToken(token: string): RefreshTokenRecord | undefined {
@@ -86,6 +102,10 @@ export class SqliteUserStore implements UserStore {
     return this.map(this.db.prepare(
       'SELECT id, name, email, password_hash, created_at FROM users WHERE id = ?'
     ).get(id) as {id:string;name:string;email:string|null;password_hash:string|null;created_at:number}|undefined);
+  }
+
+  updateUser(id:string,name:string,email:string): void {
+    this.db.prepare('UPDATE users SET name=?, email=? WHERE id=?').run(name,email,id);
   }
 
   getUserByEmail(email: string): McpUser | undefined {
