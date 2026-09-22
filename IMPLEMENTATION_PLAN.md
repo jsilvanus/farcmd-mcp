@@ -290,7 +290,7 @@ Support:
 
 The MCP authorization layer must derive effective permissions from the stored grant, not from client claims.
 
-**Deliverable:** each AI connection has its own explicit command-power boundary.
+**Deliverable:** each AI connection has its own explicit command-power boundary. Phase 6 is implemented: OAuth grants persist per user/client, authorization consent selects levels 1–5, level 5 can be permanently prohibited, grants can be edited or revoked in the web UI, and MCP execution checks the live grant so revocation/permission changes take effect immediately.
 
 ---
 
