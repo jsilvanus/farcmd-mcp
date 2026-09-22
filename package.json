@@ -1,0 +1,27 @@
+{
+  "name": "@jsilvanus/farcmd-mcp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "OAuth-protected MCP server foundation for predefined SSH command capabilities.",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "dev": "tsx watch src/server.ts",
+    "start": "node dist/server.js"
+  },
+  "dependencies": {
+    "@fastify/formbody": "^8.0.2",
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@node-rs/argon2": "^2.0.2",
+    "fastify": "^5.2.1",
+    "jose": "^6.2.12",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3"
+  }
+}
