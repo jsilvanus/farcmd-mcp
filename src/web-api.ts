@@ -3,6 +3,10 @@ import { hash, verify } from '@node-rs/argon2';
 import { randomToken } from './oauth/pkce.js';
 import type { UserStore, WebSessionStore } from './storage/interface.js';
 import { WebSessionService } from './web-session.js';
+import { SqliteSshStore } from './storage/ssh.js';
+import { decryptSecret, encryptSecret } from './crypto-at-rest.js';
+import { inspectPrivateKey, testSshConnection } from './ssh.js';
+import { getSshPassphrase, lockSshKey, unlockSshKey } from './ssh-key-cache.js';
 
 const attempts=new Map<string,{count:number;reset:number}>();
 const MAX_ATTEMPTS=8;
@@ -40,12 +44,57 @@ async function requireUser(request:FastifyRequest, reply:FastifyReply, users:Use
 }
 
 export async function mountWebApi(app:FastifyInstance, users:UserStore, sessionStore:WebSessionStore): Promise<void> {
+  const sshStore=new SqliteSshStore((sessionStore as any).db ?? (sessionStore as any).getDatabase?.());
   app.addHook('preHandler', async (request,reply) => {
     if (['POST','PATCH','PUT','DELETE'].includes(request.method) && request.url.startsWith('/api/') && !checkMutationOrigin(request)) {
       return reply.code(403).send({error:'Invalid request origin'});
     }
   });
   const sessions=new WebSessionService(sessionStore);
+  const sshDb=(sessionStore as any).getDatabase?.();
+  if (!sshDb) throw new Error('Web session store must expose the application database');
+  const ssh=new SqliteSshStore(sshDb);
+  app.get('/api/ssh/keys',async (request,reply)=>{
+    const user=await requireUser(request,reply,users,sessions); if(!user)return;
+    return {keys:ssh.listKeys(user.id).map(k=>({id:k.id,name:k.name,fingerprint:k.fingerprint,createdAt:k.createdAt,updatedAt:k.updatedAt,locked:getSshPassphrase(user.id,k.id)===undefined}))};
+  });
+  app.post('/api/ssh/keys',async (request,reply)=>{
+    const user=await requireUser(request,reply,users,sessions); if(!user)return;
+    const b=request.body as Record<string,unknown>; const name=typeof b.name==='string'?b.name.trim():''; const privateKey=typeof b.privateKey==='string'?b.privateKey:'';
+    if(name.length<1||name.length>120||privateKey.length<64||privateKey.length>100000) return reply.code(400).send({error:'Invalid SSH key data'});
+    const inspected=inspectPrivateKey(privateKey);
+    if(!inspected.valid) return reply.code(400).send({error:'The uploaded value is not a supported SSH private key'});
+    const id=crypto.randomUUID(); const now=Date.now(); const encryptedPrivateKey=encryptSecret(privateKey,'ssh-key:'+user.id+':'+id);
+    ssh.createKey({id,userId:user.id,name,encryptedPrivateKey,...(inspected.fingerprint?{fingerprint:inspected.fingerprint}:{}),createdAt:now,updatedAt:now});
+    return reply.code(201).send({key:{id,name,fingerprint:inspected.fingerprint,encrypted:true,passphraseRequired:inspected.encrypted}});
+  });
+  app.post('/api/ssh/keys/:id/unlock',async (request,reply)=>{
+    const user=await requireUser(request,reply,users,sessions); if(!user)return;
+    const key=ssh.getKey(user.id,(request.params as {id:string}).id); if(!key)return reply.code(404).send({error:'SSH key not found'});
+    const b=request.body as Record<string,unknown>; const passphrase=typeof b.passphrase==='string'?b.passphrase:'';
+    try { const privateKey=decryptSecret(key.encryptedPrivateKey,'ssh-key:'+user.id+':'+key.id); unlockSshKey(user.id,key.id,privateKey,passphrase); return {ok:true,expiresInSeconds:900}; }
+    catch { return reply.code(400).send({error:'Invalid SSH key or passphrase'}); }
+  });
+  app.post('/api/ssh/keys/:id/lock',async (request,reply)=>{ const user=await requireUser(request,reply,users,sessions); if(!user)return; lockSshKey(user.id,(request.params as {id:string}).id); return {ok:true}; });
+  app.delete('/api/ssh/keys/:id',async (request,reply)=>{ const user=await requireUser(request,reply,users,sessions); if(!user)return; const id=(request.params as {id:string}).id; if(!ssh.getKey(user.id,id))return reply.code(404).send({error:'SSH key not found'}); lockSshKey(user.id,id); ssh.deleteKey(user.id,id); return {ok:true}; });
+  app.get('/api/ssh/targets',async (request,reply)=>{ const user=await requireUser(request,reply,users,sessions); if(!user)return; return {targets:ssh.listTargets(user.id)}; });
+  app.post('/api/ssh/targets',async (request,reply)=>{
+    const user=await requireUser(request,reply,users,sessions); if(!user)return; const b=request.body as Record<string,unknown>;
+    const name=typeof b.name==='string'?b.name.trim():''; const hostname=typeof b.hostname==='string'?b.hostname.trim():''; const username=typeof b.username==='string'?b.username.trim():''; const port=typeof b.port==='number'?b.port:Number(b.port); const sshKeyId=typeof b.sshKeyId==='string'?b.sshKeyId:'';
+    if(!name||name.length>120||!hostname||hostname.length>253||!username||username.length>255||!Number.isInteger(port)||port<1||port>65535||!ssh.getKey(user.id,sshKeyId)) return reply.code(400).send({error:'Invalid SSH target data'});
+    const id=crypto.randomUUID(),now=Date.now(); ssh.createTarget({id,userId:user.id,name,hostname,port,username,sshKeyId,enabled:true,createdAt:now,updatedAt:now}); return reply.code(201).send({target:ssh.getTarget(user.id,id)});
+  });
+  app.patch('/api/ssh/targets/:id',async (request,reply)=>{
+    const user=await requireUser(request,reply,users,sessions); if(!user)return; const id=(request.params as {id:string}).id; const current=ssh.getTarget(user.id,id); if(!current)return reply.code(404).send({error:'SSH target not found'}); const b=request.body as Record<string,unknown>;
+    const next={...current,name:typeof b.name==='string'?b.name.trim():current.name,hostname:typeof b.hostname==='string'?b.hostname.trim():current.hostname,username:typeof b.username==='string'?b.username.trim():current.username,port:b.port===undefined?current.port:Number(b.port),sshKeyId:typeof b.sshKeyId==='string'?b.sshKeyId:current.sshKeyId,hostFingerprint:typeof b.hostFingerprint==='string'?b.hostFingerprint.trim():(b.hostFingerprint===null?undefined:current.hostFingerprint),enabled:typeof b.enabled==='boolean'?b.enabled:current.enabled,updatedAt:Date.now()};
+    if(!next.name||!next.hostname||!next.username||!Number.isInteger(next.port)||next.port<1||next.port>65535||!ssh.getKey(user.id,next.sshKeyId)) return reply.code(400).send({error:'Invalid SSH target data'}); ssh.updateTarget(next); return {target:ssh.getTarget(user.id,id)};
+  });
+  app.delete('/api/ssh/targets/:id',async (request,reply)=>{ const user=await requireUser(request,reply,users,sessions); if(!user)return; const id=(request.params as {id:string}).id; if(!ssh.getTarget(user.id,id))return reply.code(404).send({error:'SSH target not found'}); ssh.deleteTarget(user.id,id); return {ok:true}; });
+  app.post('/api/ssh/targets/:id/test',async (request,reply)=>{
+    const user=await requireUser(request,reply,users,sessions); if(!user)return; const id=(request.params as {id:string}).id; const target=ssh.getTarget(user.id,id); if(!target)return reply.code(404).send({error:'SSH target not found'}); const key=ssh.getKey(user.id,target.sshKeyId); if(!key)return reply.code(400).send({error:'SSH key not found'});
+    const passphrase=getSshPassphrase(user.id,key.id); let privateKey:string; try { privateKey=decryptSecret(key.encryptedPrivateKey,'ssh-key:'+user.id+':'+key.id); } catch { return reply.code(500).send({error:'Unable to decrypt SSH key'}); }
+    const result=await testSshConnection({hostname:target.hostname,port:target.port,username:target.username,...(target.hostFingerprint?{hostFingerprint:target.hostFingerprint}: {})},{privateKey,...(passphrase!==undefined?{passphrase}:{})}); return result;
+  });
   app.get('/api/auth/session',async (request,reply)=>{
     const user=await requireUser(request,reply,users,sessions); if(!user)return;
     return {user:publicUser(user)};
