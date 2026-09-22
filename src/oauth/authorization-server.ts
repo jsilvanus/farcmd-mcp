@@ -44,7 +44,7 @@ export async function mountAuthorizationServer(app:FastifyInstance,issuer:string
   const target=new URL(q.redirect_uri!);target.searchParams.set('iss',issuer);if(q.state)target.searchParams.set('state',q.state);
   if(body.action!=='approve'){target.searchParams.set('error','access_denied');return reply.redirect(target.toString());}
   const allowed=selectedLevels(body);const permanent5=body.permanentLevel5==='yes';const existing=authStore.getOAuthGrant(user.id,q.client_id!);
-  if(existing?.level5PermanentlyHidden&&(!permanent5||allowed.includes(5))){return reply.code(400).type('text/html').send(page('Permission denied','<h1>Level 5 is permanently prohibited for this OAuth source.</h1>'));}
+  if(existing?.level5PermanentlyHidden&&allowed.includes(5)){return reply.code(400).type('text/html').send(page('Permission denied','<h1>Level 5 is permanently prohibited for this OAuth source.</h1>'));}
   if(permanent5&&allowed.includes(5))return reply.code(400).type('text/html').send(page('Invalid selection','<h1>Level 5 cannot be both allowed and permanently prohibited.</h1>'));
   authStore.upsertOAuthGrant(user.id,q.client_id!,metadata.client_name,allowed,permanent5||!!existing?.level5PermanentlyHidden);
   const code=randomToken();authStore.saveAuthorizationCode({code,clientId:q.client_id!,redirectUri:q.redirect_uri!,challenge:q.code_challenge!,subject:user.id,scope:q.scope??'mcp',expires:Date.now()+60_000});
