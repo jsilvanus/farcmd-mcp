@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 export interface SshKeyMaterial { privateKey: string; passphrase?: string; }
 export interface SshTargetConfig { hostname:string; port:number; username:string; hostFingerprint?:string; }
 export interface SshTestResult { ok:boolean; fingerprint?:string; error?:string; }
-export interface SshExecResult { exitCode:number|null; signal?:string; stdout:string; stderr:string; durationMs:number; }
+export interface SshExecResult { exitCode:number|null; signal?:string; stdout:string; stderr:string; durationMs:number; truncated?:boolean; }\nconst MAX_OUTPUT_BYTES=Number(process.env.FARCMD_MAX_OUTPUT_BYTES??'262144');\nif(!Number.isSafeInteger(MAX_OUTPUT_BYTES)||MAX_OUTPUT_BYTES<4096||MAX_OUTPUT_BYTES>10_485_760)throw new Error('FARCMD_MAX_OUTPUT_BYTES must be 4096-10485760');
 
 function privateKeyFingerprint(privateKey:string, passphrase?:string):string|undefined {
   const parsed=utils.parseKey(privateKey,passphrase);
@@ -62,7 +62,7 @@ export async function executeSshCommand(target:SshTargetConfig,key:SshKeyMateria
     const client=new Client(); let presented:string|undefined; let settled=false; const started=Date.now();
     const finish=(result:SshExecResult)=>{if(settled)return;settled=true;clearTimeout(timer);client.end();resolve(result);};
     const timer=setTimeout(()=>finish({exitCode:null,signal:'TIMEOUT',stdout,stderr:stderr+'\nCommand timed out.',durationMs:Date.now()-started}),timeoutMs);
-    let stdout=''; let stderr='';
+    let stdout=''; let stderr=''; let truncated=false;
     const config=makeSshConfig(target,key,f=>!!target.hostFingerprint&&target.hostFingerprint===f);
     config.hostVerifier=f=>{presented='sha256:'+f;return !!target.hostFingerprint&&target.hostFingerprint===presented;};
     client.once('ready',()=>{
@@ -70,7 +70,7 @@ export async function executeSshCommand(target:SshTargetConfig,key:SshKeyMateria
         if(err){finish({exitCode:null,stdout,stderr:stderr+'\n'+err.message,durationMs:Date.now()-started});return;}
         stream.on('data',chunk=>{stdout+=chunk.toString();});
         stream.stderr.on('data',chunk=>{stderr+=chunk.toString();});
-        stream.on('close',(code,signal)=>finish({exitCode:typeof code==='number'?code:null,...(signal?{signal}:{ }),stdout,stderr,durationMs:Date.now()-started}));
+        stream.on('close',(code,signal)=>finish({exitCode:typeof code==='number'?code:null,...(signal?{signal}:{ }),stdout,stderr,durationMs:Date.now()-started,truncated}));
       });
     });
     client.once('error',err=>{if(!settled)finish({exitCode:null,stdout,stderr:stderr+'\n'+err.message,durationMs:Date.now()-started});});
