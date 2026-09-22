@@ -24,7 +24,7 @@ export interface FarcmdConnector {
 export class FarcmdConnectorImpl implements FarcmdConnector {
   private readonly ssh:SqliteSshStore; private readonly commands:SqliteCommandStore; private readonly grants:SqliteOAuthGrantStore; private readonly pending:SqliteExecutionStore;  private readonly history:SqliteExecutionHistoryStore;
   constructor(private readonly db:DatabaseSync,private readonly publicUrl:string){
-    this.ssh=new SqliteSshStore(db); this.commands=new SqliteCommandStore(db); this.grants=new SqliteOAuthGrantStore(db); this.pending=new SqliteExecutionStore(db); this.history=new SqliteExecutionHistoryStore(db);
+    this.ssh=new SqliteSshStore(db); this.commands=new SqliteCommandStore(db); this.grants=new SqliteOAuthGrantStore(db); this.pending=new SqliteExecutionStore(db); this.pending.cleanup(); this.history=new SqliteExecutionHistoryStore(db);
   }
   async health(_context:ConnectorContext):Promise<{ok:true}>{return {ok:true};}
   async listCommands(context:ConnectorContext):Promise<CommandSummary[]>{
