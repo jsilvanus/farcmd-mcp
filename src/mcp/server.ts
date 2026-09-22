@@ -33,9 +33,9 @@ export function createMcpServer(options:McpServerOptions):McpServer{
   const registerLevel=(level:CommandLevel)=>{
     server.registerTool('command_level_'+level,security({
       description:'Execute one predefined SSH command. OAuth controls whether the command level is exposed; levels 4 and 5 require separate human confirmation. Input is only a command ID; the server keeps the exact shell command private.',
-      inputSchema:{commandId:z.string().uuid().describe('ID of the predefined command capability')},
+      inputSchema:{commandId:z.string().uuid().describe('ID of the predefined command capability'),confirmationToken:z.string().optional().describe('Return the result of a previously human-confirmed level 4 or 5 execution')},
     }),async(args,extra)=>{
-      try{return result(await options.connector.executeCommand(contextFromExtra(extra),args.commandId,level));}catch(error){return errorResult(error);}
+      try{return result(await options.connector.executeCommand(contextFromExtra(extra),args.commandId,level,args.confirmationToken));}catch(error){return errorResult(error);}
     });
   };
   ( [1,2,3,4,5] as CommandLevel[]).forEach(registerLevel);
