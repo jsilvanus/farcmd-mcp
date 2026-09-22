@@ -17,7 +17,7 @@ function security<T extends object>(config:T):T&{securitySchemes:typeof oauthSec
 function result(value:unknown):CallToolResult{return {content:[{type:'text',text:JSON.stringify(value,null,2)}]};}
 function errorResult(error:unknown):CallToolResult{return {content:[{type:'text',text:error instanceof Error?error.message:String(error)}],isError:true};}
 
-export interface McpServerOptions{connector:FarcmdConnector;publicUrl:string;}
+export interface McpServerOptions{connector:FarcmdConnector;publicUrl:string;visibleLevels:CommandLevel[];}
 
 export function createMcpServer(options:McpServerOptions):McpServer{
   const server=new McpServer({name:'farcmd-mcp',version:'0.2.0'});
@@ -38,6 +38,6 @@ export function createMcpServer(options:McpServerOptions):McpServer{
       try{return result(await options.connector.executeCommand(contextFromExtra(extra),args.commandId,level,args.confirmationToken));}catch(error){return errorResult(error);}
     });
   };
-  ( [1,2,3,4,5] as CommandLevel[]).forEach(registerLevel);
+  options.visibleLevels.forEach(registerLevel);
   return server;
 }
