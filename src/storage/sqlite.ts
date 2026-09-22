@@ -14,7 +14,7 @@ export class SqliteAuthStore implements AuthStore, WebSessionStore {
       'CREATE TABLE IF NOT EXISTS refresh_tokens (token TEXT PRIMARY KEY, client_id TEXT NOT NULL, subject TEXT NOT NULL, scope TEXT NOT NULL, expires INTEGER NOT NULL);' +
       'CREATE TABLE IF NOT EXISTS web_sessions (token TEXT PRIMARY KEY, user_id TEXT NOT NULL, expires INTEGER NOT NULL);' +
       'CREATE TABLE IF NOT EXISTS ssh_keys (id TEXT PRIMARY KEY,user_id TEXT NOT NULL,name TEXT NOT NULL,encrypted_private_key TEXT NOT NULL,fingerprint TEXT,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL);' +
-      'CREATE TABLE IF NOT EXISTS ssh_targets (id TEXT PRIMARY KEY,user_id TEXT NOT NULL,name TEXT NOT NULL,hostname TEXT NOT NULL,port INTEGER NOT NULL,username TEXT NOT NULL,ssh_key_id TEXT NOT NULL,host_fingerprint TEXT,enabled INTEGER NOT NULL DEFAULT 1,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL);'
+      'CREATE TABLE IF NOT EXISTS ssh_targets (id TEXT PRIMARY KEY,user_id TEXT NOT NULL,name TEXT NOT NULL,hostname TEXT NOT NULL,port INTEGER NOT NULL,username TEXT NOT NULL,ssh_key_id TEXT NOT NULL,host_fingerprint TEXT,enabled INTEGER NOT NULL DEFAULT 1,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL);' + 'CREATE TABLE IF NOT EXISTS commands (id TEXT PRIMARY KEY,user_id TEXT NOT NULL,target_id TEXT NOT NULL,name TEXT NOT NULL,description TEXT NOT NULL,shell_command TEXT NOT NULL,level INTEGER NOT NULL CHECK(level BETWEEN 1 AND 5),enabled INTEGER NOT NULL DEFAULT 1,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL);'
     );
   }
   getDatabase():DatabaseSync{return this.db;}
