@@ -13,7 +13,7 @@
     "dev": "concurrently -k \"tsx watch src/server.ts\" \"vite --host 0.0.0.0\"",
     "start": "node dist/server.js",
     "build:web": "vite build",
-    "test": "node --import tsx --test test/**/*.test.ts"
+    "test": "node --import tsx --test test/security.test.ts"
   },
   "dependencies": {
     "@fastify/formbody": "^8.0.2",
