@@ -12,6 +12,8 @@ export interface McpHttpOptions {
   publicUrl: string;
   jwtSecret: Uint8Array;
   resource: string;
+  /** Access tokens stay valid for up to an hour; this refuses them at once for disabled or deleted users. */
+  isUserActive?: (userId: string) => boolean;
 }
 
 export async function mountMcpHttp(app: FastifyInstance, options: McpHttpOptions): Promise<void> {
@@ -23,6 +25,7 @@ export async function mountMcpHttp(app: FastifyInstance, options: McpHttpOptions
       try {
         const token = header.slice('Bearer '.length);
         const payload = await verifyBearerToken(token, options.jwtSecret, options.publicUrl, options.resource);
+        if (typeof payload.sub === 'string' && options.isUserActive && !options.isUserActive(payload.sub)) throw new Error('inactive user');
         authInfo = {
           token,
           clientId: typeof payload.client_id === 'string' ? payload.client_id : 'oauth-client',

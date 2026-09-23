@@ -13,9 +13,10 @@ import { AuditLog, sanitizeDetails } from '../src/audit.js';
 import { mountWebApi, AUDITED_ROUTES } from '../src/web-api.js';
 import { FarcmdConnectorImpl } from '../src/connector.js';
 import { SqliteOAuthGrantStore } from '../src/oauth/grants.js';
+import { SqliteSettingsStore } from '../src/storage/settings.js';
 
 process.env.FARCMD_ENCRYPTION_KEY??=randomBytes(32).toString('base64');
-function fixture(){const dir=mkdtempSync(join(tmpdir(),'farcmd-audit-'));const store=new SqliteAuthStore(join(dir,'app.sqlite'));return {dir,store,db:store.getDatabase(),log:new AuditLog(store.getDatabase())};}
+function fixture(){const dir=mkdtempSync(join(tmpdir(),'farcmd-audit-'));const store=new SqliteAuthStore(join(dir,'app.sqlite'));new SqliteSettingsStore(store.getDatabase()).setRegistrationEnabled(true);return {dir,store,db:store.getDatabase(),log:new AuditLog(store.getDatabase())};}
 
 test('audit entries form an HMAC chain that detects edits, deletions and forged recomputation',()=>{
   const f=fixture();
