@@ -34,7 +34,7 @@ export class SqliteSshStore {
   }
 
   getKey(userId: string, id: string): SshKeyRecord | undefined {
-    return this.mapKey(this.db.prepare('SELECT id,user_id,name,encrypted_private_key,fingerprint,created_at,updated_at FROM ssh_keys WHERE user_id=? AND id=?').get(userId,id) as any);
+    return this.mapKey(this.db.prepare('SELECT id,user_id,name,encrypted_private_key,fingerprint,public_key,created_at,updated_at FROM ssh_keys WHERE user_id=? AND id=?').get(userId,id) as any);
   }
 
   createKey(record: SshKeyRecord): void {

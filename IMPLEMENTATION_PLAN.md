@@ -587,3 +587,17 @@ MCP -> per-command private key -> SSH
 ```
 
 The forced-command mechanism is an OpenSSH server-side restriction: the command supplied by the SSH client is ignored for a matching key, while `restrict` disables PTY, forwarding and user-rc capabilities. This makes the remote SSH server enforce the same predefined-capability boundary as farcmd itself.
+
+
+## Capability integrity verification (implemented)
+
+Execution of levels 3–5 is gated on a fresh, authenticated remote measurement. Three independent authorities exist per target:
+
+```text
+master key            -> provisioning only (install/replace/remove capabilities, install/repair verifier)
+verification key      -> restrict,command="sudo -n /usr/local/libexec/farcmd/verify-<id>" (no arguments, stdin challenge only)
+  + HMAC secret          root:root 0600 on the target, AES-GCM encrypted in farcmd (own AAD namespace)
+command key           -> restrict,command="~/.ssh/farcmd/<mcp-host>-<command-id>.sh"
+```
+
+`FARCMD-VERIFY 1 <nonce>` → canonical measurement + `HMAC-SHA256(secret, measurement)` → farcmd checks MAC, nonce and every hash against its own records → only then is the pre-authenticated execution channel used. Deleting the master key never disables verification or existing capabilities. Details: `docs/capability-integrity.md`.

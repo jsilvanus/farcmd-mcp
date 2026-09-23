@@ -1,4 +1,5 @@
-import { utils } from 'ssh2';
+import ssh2 from 'ssh2';
+const { utils } = ssh2;
 
 const TTL_MS = 15 * 60_000;
 

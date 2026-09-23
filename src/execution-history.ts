@@ -1,7 +1,8 @@
 import type { DatabaseSync } from 'node:sqlite';
 import type { CommandLevel } from './command-registry.js';
 
-export type ExecutionStatus='success'|'failed'|'timeout';
+/** 'blocked' = refused before execution (e.g. failed integrity verification); nothing ran on the target. */
+export type ExecutionStatus='success'|'failed'|'timeout'|'blocked';
 
 export interface ExecutionHistoryRecord {
   id:string; userId:string; clientId:string; commandId:string; commandName:string; targetId:string;
