@@ -13,7 +13,7 @@ import { FarcmdConnectorImpl } from '../src/connector.js';
 import { encryptSecret, decryptSecret } from '../src/crypto-at-rest.js';
 import { confirmationForLevel } from '../src/execution.js';
 import { SqliteCommandKeyStore } from '../src/storage/command-keys.js';
-import { buildCommandRestrictedAuthorizedKey } from '../src/ssh.js';
+import { buildCommandRestrictedAuthorizedKey, buildFarcmdScript, farcmdScriptPath } from '../src/ssh.js';
 
 function fixture(){
   const dir=mkdtempSync(join(tmpdir(),'farcmd-test-'));
@@ -75,7 +75,7 @@ test('command restricted authorized key binds the exact forced capability',()=>{
 });
 
 
-test('farcmd scripts distinguish shell commands and bash scripts',()=>{const {buildFarcmdScript,farcmdScriptPath,buildCommandRestrictedAuthorizedKey}=require('../src/ssh.js');});
+test('farcmd scripts distinguish shell commands and bash scripts',()=>{const id=randomUUID();const path=farcmdScriptPath('https://mcp.example.com',id);assert.equal(path,`~/.ssh/farcmd/mcp.example.com-${id}.sh`);assert.match(buildFarcmdScript('https://mcp.example.com',id,'shell','echo hi'),/set -euo pipefail/);assert.match(buildFarcmdScript('https://mcp.example.com',id,'bash_script','echo hi'),/command-type: bash_script/);});
 
 test('OAuth grants normalize levels and permanently hide level 5',()=>{
   const f=fixture();
