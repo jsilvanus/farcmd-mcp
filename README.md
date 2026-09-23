@@ -113,7 +113,7 @@ MCP can be turned off without stopping the farcmd process. Three switches apply,
 
 | Switch | Who | How |
 |---|---|---|
-| Own access | the user | **Turn off MCP access** button on the Dashboard and OAuth Sources pages (`PUT /api/mcp-access`) |
+| Own access | the user | **Turn off MCP access** button at the top of the Commands page (the page after sign-in) and on OAuth Sources (`PUT /api/mcp-access`) |
 | Per user | operator | `farcmd-admin mcp disable --email …`; the user sees "disabled by the administrator" and cannot lift it |
 | All users | operator | `farcmd-admin mcp disable --all` (setting `mcp_enabled`) |
 

@@ -2,7 +2,10 @@ body{font-family:system-ui,sans-serif;background:#f6f7f9;margin:0;color:#202124}
 .verifier{border-top:1px solid #ddd;margin-top:.5rem;padding-top:.5rem}
 #verifier-script{white-space:pre-wrap;word-break:break-all;max-height:60vh;overflow:auto}
 table.audit{border-collapse:collapse;width:100%;font-size:.85rem}table.audit td,table.audit th{border-bottom:1px solid #ddd;padding:.3rem;text-align:left;vertical-align:top}table.audit td:last-child{word-break:break-word;max-width:40ch}
-#mcp-access{margin:0 0 1.5rem;padding:1.2rem}#mcp-access h2{margin:0 0 .5rem;font-size:1.1rem}#mcp-access .ok strong{color:#137333}#mcp-access .warn strong{color:#b3261e}
+.mcp-bar{display:flex;align-items:center;justify-content:space-between;gap:.5rem 1rem;flex-wrap:wrap;margin:0 0 1.5rem;padding:.6rem .6rem .6rem 1rem;border-radius:10px;border:1px solid #cfe6d6;background:#f1f8f3}
+.mcp-bar>div{display:flex;flex-wrap:wrap;align-items:baseline;gap:.25rem .6rem;min-width:0}.mcp-bar span{color:#5f6368;font-size:.85rem}
+.mcp-bar.on strong{color:#137333}.mcp-bar.off{border-color:#f3c9c4;background:#fdf1f0}.mcp-bar.off strong{color:#b3261e}
+.signed-in{color:#5f6368;font-size:.85rem}
 /* Lists with row actions (SSH, Commands) and modal dialogs */
 header{flex-wrap:wrap;gap:1rem}nav{flex-wrap:wrap}nav button{margin-top:0}
 section article+article{margin-top:2rem}
