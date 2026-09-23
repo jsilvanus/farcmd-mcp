@@ -111,23 +111,36 @@ export async function mountWebApi(app:FastifyInstance, users:UserStore, sessionS
     if(v===undefined||v===null||v==='')return undefined;
     return typeof v==='string'&&v.length<=1024&&!/[\r\n\0]/.test(v)?v:null;
   };
+  /**
+   * SSH access used to obtain root for automatic verifier install/removal. It may be a different account on
+   * the same host (e.g. an admin account with sudo) than the target's command account, with any of the
+   * user's stored master keys; the host key is the target's pinned fingerprint. Defaults to the target's
+   * own account and master key. The verifier is always installed for, and measures, target.username.
+   */
+  const installAccess=(request:FastifyRequest,userId:string,target:SshTargetRecord):{config:ReturnType<typeof targetConfig>;key:SshKeyMaterial;root:{command:string;stdinPrefix:string}}|{error:string;status:number}=>{
+    const b=(request.body??{}) as Record<string,unknown>;
+    const username=typeof b.installUsername==='string'&&b.installUsername.trim()?b.installUsername.trim():target.username;
+    if(!isSafeTargetUsername(username))return {error:'Invalid install account name.',status:400};
+    const keyId=typeof b.installKeyId==='string'&&b.installKeyId?b.installKeyId:target.sshKeyId;
+    const sudoPassword=sudoPasswordFrom(request); if(sudoPassword===null)return {error:'Invalid sudo password.',status:400};
+    if(!target.enabled||!target.hostFingerprint)return {error:'SSH target must be enabled and have a pinned host fingerprint.',status:400};
+    const master=unlockedMaster(userId,keyId); if('error' in master)return master;
+    return {config:{...targetConfig(target),username},key:master.key,root:rootInstallInvocation(verifierPrivilegeFor(username),sudoPassword)};
+  };
   const verifierTarget=async(request:FastifyRequest,reply:FastifyReply)=>{
     const user=await requireUser(request,reply,users,sessions); if(!user)return undefined;
     const target=ssh.getTarget(user.id,(request.params as {id:string}).id); if(!target){reply.code(404).send({error:'SSH target not found'});return undefined;}
     return {user,target};
   };
   app.get('/api/ssh/targets/:id/verifier',async(request,reply)=>{const ctx=await verifierTarget(request,reply);if(!ctx)return;return {verifier:verifierStatus(verifiers.getForTarget(ctx.user.id,ctx.target.id))};});
-  // Automatic install/repair: needs provisioning authority (master key) with root on the target (root account or sudo).
+  // Automatic install/repair: needs a master key and root on the target through the chosen SSH account (root, sudo password or passwordless sudo).
   app.post('/api/ssh/targets/:id/verifier',async(request,reply)=>{
     const ctx=await verifierTarget(request,reply);if(!ctx)return; const {user,target}=ctx;
-    if(!target.enabled||!target.hostFingerprint)return reply.code(400).send({error:'SSH target must be enabled and have a pinned host fingerprint.'});
     if(!isSafeTargetUsername(target.username))return reply.code(400).send({error:'The target account name is not supported by the verifier.'});
-    const sudoPassword=sudoPasswordFrom(request); if(sudoPassword===null)return reply.code(400).send({error:'Invalid sudo password.'});
-    const master=unlockedMaster(user.id,target.sshKeyId); if('error' in master)return reply.code(master.status).send({error:master.error+' Use the manual root install script instead.'});
+    const access=installAccess(request,user.id,target); if('error' in access)return reply.code(access.status).send({error:access.error+(access.status===400&&/master key/.test(access.error)?' Use the manual root install script instead.':'')});
     const {record,script}=prepareVerifier(user.id,target);
-    const root=rootInstallInvocation(record.privilege,sudoPassword);
-    try{await executeAsMaster(targetConfig(target),master.key,root.command,root.stdinPrefix+script);}
-    catch(error){return reply.code(502).send({error:'Verifier installation failed: '+(error instanceof Error?error.message:String(error))+' (automatic installation needs root on the target: the root account, the account\'s sudo password, or passwordless sudo; otherwise use the manual root install script).'});}
+    try{await executeAsMaster(access.config,access.key,access.root.command,access.root.stdinPrefix+script);}
+    catch(error){return reply.code(502).send({error:'Verifier installation failed: '+(error instanceof Error?error.message:String(error))+' (automatic installation needs root on the target through the chosen SSH account: the root account, that account\'s sudo password, or passwordless sudo; otherwise use the manual root install script).'});}
     verifiers.upsert({...record,installedAt:Date.now()});
     const result=await verification.verifyTarget(user.id,target);
     return reply.code(201).send({verifier:verifierStatus(verifiers.getForTarget(user.id,target.id)),verification:verificationSummary(user.id,result)});
@@ -150,10 +163,10 @@ export async function mountWebApi(app:FastifyInstance, users:UserStore, sessionS
     const ctx=await verifierTarget(request,reply);if(!ctx)return; const {user,target}=ctx;
     const v=verifiers.getForTarget(user.id,target.id); if(!v)return reply.code(404).send({error:'No verification authority for this target.'});
     const uninstallScript=renderVerifierUninstallScript(v.id,v.username);
-    const sudoPassword=sudoPasswordFrom(request); if(sudoPassword===null)return reply.code(400).send({error:'Invalid sudo password.'});
+    const master=installAccess(request,user.id,target);
+    if('error' in master&&/^Invalid/.test(master.error))return reply.code(400).send({error:master.error});
     let removed=false; let errorMessage:string|undefined;
-    const master=target.enabled&&target.hostFingerprint?unlockedMaster(user.id,target.sshKeyId):{error:'Target is disabled or unpinned.',status:400};
-    if('key' in master){try{const root=rootInstallInvocation(v.privilege,sudoPassword);await executeAsMaster(targetConfig(target),master.key,root.command,root.stdinPrefix+uninstallScript);removed=true;}catch(error){errorMessage=error instanceof Error?error.message:'Remote removal failed.';}}
+    if('key' in master){try{await executeAsMaster(master.config,master.key,master.root.command,master.root.stdinPrefix+uninstallScript);removed=true;}catch(error){errorMessage=error instanceof Error?error.message:'Remote removal failed.';}}
     else errorMessage=master.error;
     verifiers.delete(user.id,v.id);
     return {ok:true,removed,...(errorMessage?{error:errorMessage}:{}),...(removed?{}:{uninstallScript})};

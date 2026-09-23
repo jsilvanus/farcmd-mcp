@@ -54,7 +54,7 @@ modify gives no such trust.
 ```
 MASTER KEY (ssh_keys)             provisioning authority
   ├── install / replace / remove command capabilities
-  └── install / repair the verifier  (needs root on target: root account or sudo)
+  └── install / repair the verifier  (needs root on target via any SSH account: root, sudo password or passwordless sudo)
 
 VERIFICATION AUTHORITY            per target, table verification_authorities
   ├── verification key            forced to the root-owned verifier only
@@ -202,7 +202,7 @@ future hardening mode, not part of this change.
 | Event | Behaviour |
 |---|---|
 | Target created | No verifier: L3–L5 blocked (the UI says so on the SSH and Commands pages). L1/L2 work. |
-| **Install, automatic** (`POST /api/ssh/targets/:id/verifier`) | Needs the unlocked master **and** root via that master: the root account, the account's **sudo password** (asked in the UI), or passwordless sudo. The installer is sent on **stdin**, so the secret is never in argv. farcmd then runs a verification and activates. |
+| **Install, automatic** (`POST /api/ssh/targets/:id/verifier`) | Needs an unlocked master key **and** root through the SSH account farcmd connects as: the root account, that account's **sudo password** (asked in the UI), or passwordless sudo. That account can be **different from the command account**, e.g. an admin account on the same host with any of your stored master keys (`installUsername`, `installKeyId`; the target's pinned host key is used). The verifier is still installed for, and measures, the command account, which then needs no sudo rights at all. The installer is sent on **stdin**, so the secret is never in argv. farcmd then runs a verification and activates. |
 | **Install, manual** (`POST …/verifier/manual`) | Works **without any master**. farcmd shows the root install script once (it contains the secret). An administrator runs it as root, then clicks *Verify now*. Recommended when the master account should not have root. |
 | Activation | The first authenticated response whose verifier-level checks pass sets `status=active` and records the interpreter path and verifier hash. Until then, L3–L5 are blocked. |
 | **Master deleted** | Allowed as before. Verification uses only the verification key and secret, so L3–L5 keep working (tested for L3, L4 and L5). Provisioning, replacement, automatic verifier repair and remote cleanup become unavailable (tested). Local removals go to the remote-capability ledger, and ledger-pending scripts are tolerated by the namespace check. |
@@ -214,9 +214,7 @@ future hardening mode, not part of this change.
 
 **Sudo password for automatic install/removal.** The web UI asks for the target account's sudo password (optional). It is used for that one request only: it is not stored, not logged, and not echoed back in errors. It travels as the first line of the SSH session's stdin. On the target the shell reads it with the `read` builtin and passes it to `sudo -S -p '' -v` through the `printf` builtin, so it never appears in a process argument list. Only after sudo accepts it does `sudo -n sh -s` read the rest of stdin (the installer). A wrong password stops before the installer, and its secret, is read by anything. The sudo timestamp (tied to that shell when there is no terminal) is dropped with `sudo -k` afterwards. Password-protected sudo fits the trust model: an attacker who only holds a shell or key for the account doesn't know the password. Passwordless sudo doesn't fit it, so a passwordless grant should be temporary.
 
-**Install-time trust.** Automatic installation runs through the target account's SSH session, so it
-assumes that account is not compromised *at install time* (its shell start-up files run before
-`sudo`). The manual root script avoids that assumption.
+**Install-time trust.** Automatic installation runs through the SSH session of the account farcmd connects as, so it assumes that account is not compromised *at install time*: its shell start-up files run before `sudo` and could capture the sudo password or the installer. Using a separate admin account keeps this assumption away from the command account. The manual root install script avoids the assumption entirely. The manual root script avoids that assumption.
 
 ## 9. Trust boundary summary
 

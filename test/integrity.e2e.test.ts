@@ -50,14 +50,15 @@ test('capability integrity verification end to end',{skip:skipReason,timeout:300
   const dir=mkdtempSync(join(tmpdir(),'farcmd-e2e-'));
   chmodSync(dir,0o755);
   const account='fce2e'+randomBytes(3).toString('hex');
+  const admin='fce2a'+randomBytes(3).toString('hex');
   const port=await freePort();
   let sshd:ChildProcess|undefined; let verifierId:string|undefined;
-  const tempSudoers='/etc/sudoers.d/zz-farcmd-e2e-'+account;
+  const tempSudoers='/etc/sudoers.d/zz-farcmd-e2e-'+admin;
   try{
     // ---------------------------------------------------------------- target host setup
     must('useradd -m -s /bin/bash '+account+' && usermod -p "*" '+account);
     must('mkdir -p /run/sshd && ssh-keygen -q -t ed25519 -N "" -f '+dir+'/host');
-    writeFileSync(dir+'/sshd_config',['Port '+port,'ListenAddress 127.0.0.1','HostKey '+dir+'/host','PidFile '+dir+'/sshd.pid','UsePAM no','PasswordAuthentication no','KbdInteractiveAuthentication no','PubkeyAuthentication yes','AuthorizedKeysFile .ssh/authorized_keys .ssh/authorized_keys2','AllowUsers '+account,'StrictModes yes','AllowTcpForwarding yes','AllowAgentForwarding yes','PermitTTY yes','LogLevel ERROR',''].join('\n'));
+    writeFileSync(dir+'/sshd_config',['Port '+port,'ListenAddress 127.0.0.1','HostKey '+dir+'/host','PidFile '+dir+'/sshd.pid','UsePAM no','PasswordAuthentication no','KbdInteractiveAuthentication no','PubkeyAuthentication yes','AuthorizedKeysFile .ssh/authorized_keys .ssh/authorized_keys2','AllowUsers '+account+' '+admin,'StrictModes yes','AllowTcpForwarding yes','AllowAgentForwarding yes','PermitTTY yes','LogLevel ERROR',''].join('\n'));
     sshd=spawn('/usr/sbin/sshd',['-D','-e','-f',dir+'/sshd_config'],{stdio:['ignore','ignore','pipe']});
     // The master key is an ordinary unrestricted key of the target account. The same key is the
     // attacker's channel: "full shell as the target account".
@@ -114,30 +115,35 @@ test('capability integrity verification end to end',{skip:skipReason,timeout:300
       const two=await run(cmdL2,2); assert.equal((two as any).stdout,'level-two\n');
     });
 
-    await t.test('automatic verifier install with the account\'s sudo password',{timeout:60_000},async()=>{
-      // The account may use sudo only with its password: an attacker holding just a shell (a key) cannot.
-      must('chpasswd',account+':Sudo-Pa55word\n');
-      writeFileSync(tempSudoers,account+' ALL=(root) ALL\n',{mode:0o440});
-      try{
-        assert.notEqual((await attacker('sudo -n true')).exitCode,0,'no passwordless root for the account');
-        const none=await api('POST','/api/ssh/targets/'+targetId+'/verifier',{});
-        assert.equal(none.status,502); assert.match(none.body.error,/password is required/);
-        const wrong=await api('POST','/api/ssh/targets/'+targetId+'/verifier',{sudoPassword:'wrong password'});
-        assert.equal(wrong.status,502); assert.match(wrong.body.error,/sudo rejected the password/);
-        assert.equal((await api('GET','/api/ssh/targets/'+targetId+'/verifier')).body.verifier.status,'unavailable');
-        assert.equal(sh('ls /etc/farcmd/*.key 2>/dev/null').stdout,'','nothing was installed with a rejected password');
-        assert.equal((await api('POST','/api/ssh/targets/'+targetId+'/verifier',{sudoPassword:'bad\nline'})).status,400);
-        const r=await api('POST','/api/ssh/targets/'+targetId+'/verifier',{sudoPassword:'Sudo-Pa55word'});
-        assert.equal(r.status,201,JSON.stringify(r.body));
-        verifierId=r.body.verifier.id;
-        assert.equal(r.body.verifier.status,'active',JSON.stringify(r.body));
-        assert.equal(r.body.verification.ok,true,JSON.stringify(r.body.verification));
-        verifierId=r.body.verifier.id;
-        assert.notEqual((await attacker('sudo -n true')).exitCode,0,'no sudo timestamp is left behind');
-        const stored=JSON.stringify(db.prepare('SELECT * FROM verification_authorities').all())+JSON.stringify(db.prepare('SELECT * FROM security_events').all());
-        assert.ok(!stored.includes('Sudo-Pa55word'),'the sudo password is never stored');
-      }finally{rmSync(tempSudoers,{force:true});}
-      assert.notEqual((await attacker('sudo -n true')).exitCode,0);
+    await t.test('automatic verifier install through a separate admin account with its sudo password',{timeout:60_000},async()=>{
+      // The command account has no sudo at all; root comes from a different admin account whose sudo needs a password.
+      const adminKey=utils.generateKeyPairSync('ed25519',{comment:'farcmd-e2e-admin'});
+      must('useradd -m -s /bin/bash '+admin+' && install -d -m 700 -o '+admin+' -g '+admin+' /home/'+admin+'/.ssh && cat > /home/'+admin+'/.ssh/authorized_keys && chown '+admin+': /home/'+admin+'/.ssh/authorized_keys && chmod 600 /home/'+admin+'/.ssh/authorized_keys',String(adminKey.public).trim()+'\n');
+      must('chpasswd',admin+':Sudo-Pa55word\n');
+      writeFileSync(tempSudoers,admin+' ALL=(root) ALL\n',{mode:0o440});
+      const adminMaster=await api('POST','/api/ssh/keys',{name:'admin',privateKey:String(adminKey.private)}); assert.equal(adminMaster.status,201);
+      const via=(extra:Record<string,unknown>)=>api('POST','/api/ssh/targets/'+targetId+'/verifier',{installUsername:admin,installKeyId:adminMaster.body.key.id,...extra});
+      assert.notEqual((await attacker('sudo -n true')).exitCode,0,'the command account has no root');
+      const own=await api('POST','/api/ssh/targets/'+targetId+'/verifier',{});
+      assert.equal(own.status,502,'the command account itself cannot install the verifier');
+      const none=await via({}); assert.equal(none.status,502); assert.match(none.body.error,/password is required/);
+      const wrong=await via({sudoPassword:'wrong password'}); assert.equal(wrong.status,502); assert.match(wrong.body.error,/sudo rejected the password/);
+      assert.equal((await api('GET','/api/ssh/targets/'+targetId+'/verifier')).body.verifier.status,'unavailable');
+      assert.equal(sh('ls /etc/farcmd/*.key 2>/dev/null').stdout,'','nothing was installed with a rejected password');
+      assert.equal((await via({sudoPassword:'bad\nline'})).status,400);
+      assert.equal((await via({installUsername:'bad user'})).status,400);
+      const r=await via({sudoPassword:'Sudo-Pa55word'});
+      assert.equal(r.status,201,JSON.stringify(r.body));
+      verifierId=r.body.verifier.id;
+      assert.equal(r.body.verifier.status,'active',JSON.stringify(r.body));
+      assert.equal(r.body.verification.ok,true,JSON.stringify(r.body.verification));
+      // Installed for the command account, not for the admin account.
+      assert.match(must('cat '+verifierPaths(verifierId!).sudoers),new RegExp('^'+account+' ALL=\\(root\\) NOPASSWD: ','m'));
+      assert.equal(Number((await attacker('grep -c farcmd-verify: .ssh/authorized_keys')).stdout.trim()),1);
+      assert.equal(sh('grep -c farcmd-verify: /home/'+admin+'/.ssh/authorized_keys').stdout.trim(),'0');
+      const stored=JSON.stringify(db.prepare('SELECT * FROM verification_authorities').all())+JSON.stringify(db.prepare('SELECT * FROM security_events').all());
+      assert.ok(!stored.includes('Sudo-Pa55word'),'the sudo password is never stored');
+      assert.notEqual(sh("runuser -u "+admin+" -- sudo -n true").status,0,'no sudo timestamp is left behind');
     });
     const paths=verifierPaths(verifierId!);
 
@@ -328,7 +334,7 @@ sys.stdout.write(body + "mac " + hmac.new(os.urandom(32), body.encode(), hashlib
     });
   }finally{
     if(sshd&&sshd.exitCode===null){const exited=new Promise(r=>sshd!.once('exit',r));sshd.kill();await exited;}
-    sh('pkill -KILL -u '+account+' 2>/dev/null; sleep 0.2');
+    sh('pkill -KILL -u '+account+' 2>/dev/null; pkill -KILL -u '+admin+' 2>/dev/null; sleep 0.2'); sh('userdel -r '+admin+' 2>/dev/null');
     const removedAccount=sh('userdel -r '+account);
     if(removedAccount.status!==0&&sh('getent passwd '+account).status===0)console.error('farcmd e2e: could not remove test account '+account+': '+removedAccount.stderr);
     rmSync(tempSudoers,{force:true});
