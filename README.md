@@ -139,3 +139,20 @@ Immediately before a level 3, 4 or 5 command runs (after human approval or passw
 - The target account must not have unrestricted sudo/root: root on the target is outside what any on-host verifier can defend against.
 
 See [`docs/capability-integrity.md`](docs/capability-integrity.md) for the threat model, protocol, trust boundary, TOCTOU analysis and lifecycle. `sudo -E npm run test:e2e` runs the end-to-end tests against a real OpenSSH server.
+
+
+## Audit log
+
+Security-relevant actions are recorded in an append-only audit log (`security_events`) and shown on the **Audit** page of the web UI (`GET /api/audit`, filterable by event, outcome and text).
+
+What is recorded:
+
+- **Web control plane**: every state-changing API call, recorded automatically by one Fastify hook with the event name, acting user, target, outcome, HTTP status, error and a list of changed field names (plus non-secret values such as level, enabled, hostname or visible levels). Covers sign-in, failed sign-in (attributed to the targeted account), registration, logout, account changes, SSH key upload/generate/unlock/lock/delete, target changes (including host fingerprint pinning), commands, capability install/remove/cleanup, level-5 password changes, verifier install/repair/manual script/verify/removal, OAuth grant changes/revocation, and reading remote shell history. A test fails if a new mutating route is not mapped to an audit event.
+- **OAuth**: consent approved or denied (with the granted levels), failed OAuth sign-in, token issue and refresh, rejected grants.
+- **MCP**: confirmation requested, attempted and executed; level-5 password failures; refused calls (revoked grant, hidden level, wrong tool); integrity verification passed or blocked; every command execution with exit status.
+
+Secrets are never recorded: request bodies are not logged as a whole, secret-looking keys (passwords, passphrases, private keys, tokens, …) are always removed, and command content is stored only as its SHA-256.
+
+**Tamper evidence.** Each entry has a sequence number and `hash = HMAC-SHA256(K, previous hash ‖ entry)`, with `K` derived (HKDF) from `FARCMD_ENCRYPTION_KEY`. *Verify integrity* on the Audit page (`GET /api/audit/verify`) recomputes the chain. It detects any modified, reordered or deleted entry, and someone with database access alone cannot recompute it. It cannot detect removal of the *newest* entries unless you compare against a head hash noted earlier; the verify result shows the current head for that purpose.
+
+**Retention.** `FARCMD_AUDIT_RETENTION_DAYS` (default 365, `0` = keep forever). Pruning runs at startup and daily, removes only the oldest entries, and records an `audit.pruned` entry with the last removed hash, so the remaining chain still verifies. Execution output is kept separately in the execution history.

@@ -20,6 +20,8 @@ import { SqliteExecutionHistoryStore } from './execution-history.js';
 import { FarcmdConnectorImpl } from './connector.js';
 import { SqliteExecutionStore } from './execution.js';
 import { isCommandLevel } from './command-levels.js';
+import { AuditLog, type AuditOutcome } from './audit.js';
+import { createHash } from 'node:crypto';
 
 const attempts=new Map<string,{count:number;reset:number}>();
 const MAX_ATTEMPTS=8;
@@ -59,6 +61,38 @@ async function requireUser(request:FastifyRequest, reply:FastifyReply, users:Use
   return user;
 }
 
+declare module 'fastify' { interface FastifyRequest { auditUserId?:string|undefined; auditError?:string|undefined; } }
+
+/** Audited web API routes: "<METHOD> <route pattern>" -> [event, target type]. Every mutating /api/ route must be listed. */
+export const AUDITED_ROUTES:Record<string,[string,string|undefined]>={
+  'POST /api/auth/login':['auth.login','user'],'POST /api/auth/logout':['auth.logout','user'],'POST /api/auth/register':['auth.register','user'],'PATCH /api/account':['account.update','user'],
+  'POST /api/ssh/keys/generate':['ssh_key.generate','ssh_key'],'POST /api/ssh/keys':['ssh_key.upload','ssh_key'],'PATCH /api/ssh/keys/:id':['ssh_key.update','ssh_key'],
+  'POST /api/ssh/keys/:id/unlock':['ssh_key.unlock','ssh_key'],'POST /api/ssh/keys/:id/lock':['ssh_key.lock','ssh_key'],'DELETE /api/ssh/keys/:id':['ssh_key.delete','ssh_key'],
+  'POST /api/ssh/targets':['ssh_target.create','ssh_target'],'PATCH /api/ssh/targets/:id':['ssh_target.update','ssh_target'],'DELETE /api/ssh/targets/:id':['ssh_target.delete','ssh_target'],
+  'POST /api/ssh/targets/:id/test':['ssh_target.test','ssh_target'],'POST /api/ssh/targets/:id/capability-ledger/cleanup':['capability.cleanup','ssh_target'],
+  'POST /api/ssh/targets/:id/verifier':['verifier.install','ssh_target'],'POST /api/ssh/targets/:id/verifier/manual':['verifier.manual_script','ssh_target'],
+  'POST /api/ssh/targets/:id/verifier/verify':['verifier.verify','ssh_target'],'DELETE /api/ssh/targets/:id/verifier':['verifier.remove','ssh_target'],
+  'POST /api/commands':['command.create','command'],'PATCH /api/commands/:id':['command.update','command'],'DELETE /api/commands/:id':['command.delete','command'],
+  'POST /api/commands/:id/key':['capability.install','command'],'DELETE /api/commands/:id/key':['capability.remove','command'],
+  'POST /api/commands/:id/execution-password':['command.level5_password_set','command'],'POST /api/confirm/:token':['command.confirmation',undefined],
+  'PATCH /api/oauth/grants/:clientId':['oauth_grant.update','oauth_client'],'POST /api/oauth/grants/:clientId/revoke':['oauth_grant.revoke','oauth_client'],
+  'GET /api/history/shell':['shell_history.read','ssh_target'],
+};
+/** Non-secret request fields worth keeping in the audit trail (values). Everything else is reduced to its key name. */
+const AUDITED_FIELDS=new Set(['name','description','hostname','port','username','sshKeyId','hostFingerprint','enabled','level','type','targetId','visibleLevels','level5PermanentlyHidden','installUsername','installKeyId','email']);
+function auditDetails(body:unknown,query:unknown):Record<string,unknown>{
+  const details:Record<string,unknown>={};
+  if(body&&typeof body==='object'&&!Array.isArray(body)){
+    const b=body as Record<string,unknown>; const fields=Object.keys(b).filter(k=>b[k]!==undefined);
+    if(fields.length)details.fields=fields;
+    for(const k of fields)if(AUDITED_FIELDS.has(k))details[k]=b[k];
+    const content=typeof b.content==='string'?b.content:typeof b.shellCommand==='string'?b.shellCommand:undefined;
+    if(content!==undefined)details.contentSha256=createHash('sha256').update(content,'utf8').digest('hex');
+  }
+  if(query&&typeof query==='object'&&typeof (query as any).targetId==='string')details.targetId=(query as any).targetId;
+  return details;
+}
+
 export async function mountWebApi(app:FastifyInstance, users:UserStore, sessionStore:WebSessionStore): Promise<void> {
   app.addHook('preHandler', async (request,reply) => {
     if (['POST','PATCH','PUT','DELETE'].includes(request.method) && request.url.startsWith('/api/') && !checkMutationOrigin(request)) {
@@ -68,6 +102,22 @@ export async function mountWebApi(app:FastifyInstance, users:UserStore, sessionS
   const sessions=new WebSessionService(sessionStore);
   const sshDb=(sessionStore as any).getDatabase?.();
   if (!sshDb) throw new Error('Web session store must expose the application database');
+  const audit=new AuditLog(sshDb);
+  // Audit trail for every state-changing (and sensitive read) web API call. The acting user is resolved
+  // from the session before the handler runs, so logout and account deletion are attributed correctly.
+  app.addHook('onRequest',async request=>{const token=request.cookies?.farcmd_session;request.auditUserId=token?sessions.get(token)?.userId:undefined;});
+  app.addHook('onSend',async(request,reply,payload)=>{
+    if(reply.statusCode>=400&&typeof payload==='string'){try{const e=JSON.parse(payload).error;if(typeof e==='string')request.auditError=e.slice(0,300);}catch{}}
+    return payload;
+  });
+  app.addHook('onResponse',async(request,reply)=>{
+    const route=AUDITED_ROUTES[request.method+' '+(request.routeOptions.url??'')]; if(!route)return;
+    const [event,targetType]=route; const params=(request.params??{}) as Record<string,string>;
+    if(!request.auditUserId&&!event.startsWith('auth.'))return; // unauthenticated calls are rejected before doing anything
+    const outcome:AuditOutcome=reply.statusCode<400?'success':'failure';
+    const targetId=targetType==='user'?request.auditUserId:(params.id??(params.clientId?decodeURIComponent(params.clientId):undefined)??(request.query as any)?.targetId);
+    audit.record({event,actor:'web',outcome,userId:request.auditUserId,ip:request.ip,targetType,targetId,details:{...auditDetails(request.body,request.query),status:reply.statusCode,...(request.auditError?{error:request.auditError}:{})}});
+  });
   const ssh=new SqliteSshStore(sshDb);
   const commands=new SqliteCommandStore(sshDb);
   const installations=new SqliteCommandInstallationStore(sshDb);
@@ -259,6 +309,13 @@ export async function mountWebApi(app:FastifyInstance, users:UserStore, sessionS
   app.get('/api/oauth/grants',async(request,reply)=>{const user=await requireUser(request,reply,users,sessions);if(!user)return;return {grants:(sessionStore as any).listOAuthGrants(user.id).map((g:any)=>({...g,revoked:!!g.revokedAt}))};});
   app.patch('/api/oauth/grants/:clientId',async(request,reply)=>{const user=await requireUser(request,reply,users,sessions);if(!user)return;const clientId=decodeURIComponent((request.params as {clientId:string}).clientId);const b=request.body as Record<string,unknown>;const raw=Array.isArray(b.visibleLevels)?b.visibleLevels:[];const allowed=raw.map(v=>typeof v==='number'?v:Number(v)).filter(isCommandLevel) as CommandLevel[];const permanent5=Boolean(b.level5PermanentlyHidden);try{(sessionStore as any).updateOAuthGrant(user.id,clientId,allowed,permanent5);return {grant:(sessionStore as any).getOAuthGrant(user.id,clientId)};}catch(error){return reply.code(400).send({error:error instanceof Error?error.message:String(error)});}});
   app.post('/api/oauth/grants/:clientId/revoke',async(request,reply)=>{const user=await requireUser(request,reply,users,sessions);if(!user)return;const clientId=decodeURIComponent((request.params as {clientId:string}).clientId);if(!(sessionStore as any).getOAuthGrant(user.id,clientId))return reply.code(404).send({error:'OAuth source not found'});(sessionStore as any).revokeOAuthGrant(user.id,clientId);return {ok:true};});
+  app.get('/api/audit',async(request,reply)=>{
+    const user=await requireUser(request,reply,users,sessions);if(!user)return;
+    const q=request.query as Record<string,string|undefined>;
+    const outcome=q.outcome==='success'||q.outcome==='failure'?q.outcome:undefined;
+    return audit.list(user.id,{...(q.event?{event:q.event}:{}),...(outcome?{outcome}:{}),...(q.search?{search:q.search}:{}),limit:q.limit?Number(q.limit):100,offset:q.offset?Number(q.offset):0});
+  });
+  app.get('/api/audit/verify',async(request,reply)=>{const user=await requireUser(request,reply,users,sessions);if(!user)return;return audit.verify();});
   app.get('/api/auth/session',async (request,reply)=>{
     const user=await requireUser(request,reply,users,sessions); if(!user)return;
     return {user:publicUser(user)};
@@ -269,6 +326,8 @@ export async function mountWebApi(app:FastifyInstance, users:UserStore, sessionS
     const email=typeof b.email==='string'?cleanEmail(b.email):'';
     const password=typeof b.password==='string'?b.password:'';
     const user=users.getUserByEmail(email);
+    // Failed attempts are attributed to the targeted account (if it exists) so its owner can see them.
+    request.auditUserId=user?.id;
     if(!user?.passwordHash || !(await verify(user.passwordHash,password))) return reply.code(401).send({error:'Invalid email or password'});
     const token=sessions.create(user.id);
     reply.setCookie('farcmd_session',token,cookieOptions());
@@ -290,7 +349,7 @@ export async function mountWebApi(app:FastifyInstance, users:UserStore, sessionS
     if(password.length<12||password.length>1024) return reply.code(400).send({error:'Password must be 12-1024 characters'});
     if(users.getUserByEmail(email)) return reply.code(409).send({error:'An account with that email already exists'});
     const user={id:crypto.randomUUID(),name,email,passwordHash:await hash(password,{algorithm:2}),createdAt:Date.now()};
-    users.createUser(user);
+    users.createUser(user); request.auditUserId=user.id;
     const token=sessions.create(user.id); reply.setCookie('farcmd_session',token,cookieOptions());
     return reply.code(201).send({user:publicUser(user)});
   });

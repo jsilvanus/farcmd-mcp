@@ -4,6 +4,7 @@ import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import type { AuthStore, AuthorizationCodeRecord, McpUser, RefreshTokenRecord, UserStore, WebSessionRecord, WebSessionStore } from './interface.js';
 import { SqliteOAuthGrantStore } from '../oauth/grants.js';
+import { AuditLog, migrateAuditTable, type AuditOutcome } from '../audit.js';
 
 export class SqliteAuthStore implements AuthStore, WebSessionStore {
   private readonly db:DatabaseSync;
@@ -48,11 +49,12 @@ export class SqliteAuthStore implements AuthStore, WebSessionStore {
     try{this.db.exec('ALTER TABLE pending_executions ADD COLUMN signal TEXT');}catch{}
     try{this.db.exec('ALTER TABLE oauth_grants ADD COLUMN visible_levels TEXT NOT NULL DEFAULT \'\'');}catch{}
     try{this.db.exec('ALTER TABLE oauth_grants ADD COLUMN level5_permanently_hidden INTEGER NOT NULL DEFAULT 0');}catch{}
+    migrateAuditTable(this.db);
     this.db.exec('UPDATE oauth_grants SET visible_levels=allowed_levels WHERE visible_levels=\'\' AND allowed_levels<>\'\';UPDATE oauth_grants SET level5_permanently_hidden=level5_permanently_denied WHERE level5_permanently_denied=1 AND level5_permanently_hidden=0;');
   }
   getDatabase():DatabaseSync{return this.db;}
-  recordSecurityEvent(userId:string|undefined,clientId:string|undefined,event:string,details?:unknown):void{this.db.prepare('INSERT INTO security_events (id,user_id,client_id,event,details,created_at) VALUES (?,?,?,?,?,?)').run(randomUUID(),userId??null,clientId??null,event,details===undefined?null:JSON.stringify(details),Date.now());}
-  cleanupSecurityEvents(maxAgeMs=90*24*60*60_000):void{this.db.prepare('DELETE FROM security_events WHERE created_at < ?').run(Date.now()-maxAgeMs);}
+  recordSecurityEvent(userId:string|undefined,clientId:string|undefined,event:string,details?:Record<string,unknown>,outcome:AuditOutcome='success'):void{new AuditLog(this.db).record({event,actor:'oauth',outcome,userId,clientId,...(clientId?{targetType:'oauth_client',targetId:clientId}:{}),details});}
+  cleanupSecurityEvents(maxAgeMs=90*24*60*60_000):number{return new AuditLog(this.db).prune(maxAgeMs);}
   private grants(){return new SqliteOAuthGrantStore(this.db);}
   getOAuthGrant(u:string,c:string){return this.grants().get(u,c);}
   upsertOAuthGrant(u:string,c:string,n:string,l:number[],p:boolean){this.grants().upsert(u,c,n,l as any,p);}

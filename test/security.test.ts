@@ -235,7 +235,7 @@ test('L3 execution without a verification authority is blocked before any SSH co
     assert.ok(Date.now()-started<1000,'no network connection was attempted');
     const row=f.db.prepare('SELECT status,error FROM execution_history WHERE user_id=?').get(f.userId) as any;
     assert.equal(row.status,'blocked'); assert.match(row.error,/unavailable/);
-    const event=f.db.prepare("SELECT event FROM security_events WHERE user_id=? AND event='integrity_verification_blocked'").get(f.userId) as any;
+    const event=f.db.prepare("SELECT event FROM security_events WHERE user_id=? AND event='integrity.verification_blocked'").get(f.userId) as any;
     assert.ok(event);
   } finally { if(previous===undefined) delete process.env.FARCMD_ENCRYPTION_KEY; else process.env.FARCMD_ENCRYPTION_KEY=previous; cleanup(f); }
 });
