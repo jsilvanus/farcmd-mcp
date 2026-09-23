@@ -116,6 +116,6 @@ export async function installCommandCapability(target:SshTargetConfig,masterKey:
 export async function removeCommandCapability(target:SshTargetConfig,masterKey:SshKeyMaterial,authorizedKey:string,remoteScriptPath:string):Promise<void>{
   const encodedKey=Buffer.from(authorizedKey,'utf8').toString('base64');
   const encodedPath=Buffer.from(remoteScriptPath,'utf8').toString('base64');
-  const command=['set -eu','key=$(printf %s '+encodedKey+' | base64 -d)','path=$(printf %s '+encodedPath+' | base64 -d)','if [ -f ~/.ssh/authorized_keys ]; then','tmp=$(mktemp ~/.ssh/authorized_keys.farcmd.XXXXXX)','grep -Fvx -- "$key" ~/.ssh/authorized_keys > "$tmp" || test $? -eq 1','chmod 600 "$tmp"','mv "$tmp" ~/.ssh/authorized_keys','fi','rm -f -- "$path"'].join('; ');
+  const command='set -eu; key=$(printf %s '+encodedKey+' | base64 -d); path=$(printf %s '+encodedPath+' | base64 -d); if [ -f ~/.ssh/authorized_keys ]; then tmp=$(mktemp ~/.ssh/authorized_keys.farcmd.XXXXXX); grep -Fvx -- "$key" ~/.ssh/authorized_keys > "$tmp" || test $? -eq 1; chmod 600 "$tmp"; mv "$tmp" ~/.ssh/authorized_keys; fi; rm -f -- "$path"';
   await executeAsMaster(target,masterKey,command);
 }
