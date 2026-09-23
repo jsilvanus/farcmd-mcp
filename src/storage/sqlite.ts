@@ -1,5 +1,5 @@
 import { mkdirSync } from 'node:fs';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import type { AuthStore, AuthorizationCodeRecord, McpUser, RefreshTokenRecord, UserStore, WebSessionRecord, WebSessionStore } from './interface.js';
@@ -28,6 +28,7 @@ export class SqliteAuthStore implements AuthStore, WebSessionStore {
     try{this.db.exec("ALTER TABLE commands ADD COLUMN type TEXT NOT NULL DEFAULT 'shell'");}catch{}
     try{this.db.exec("ALTER TABLE commands ADD COLUMN content TEXT NOT NULL DEFAULT ''");}catch{}
     try{this.db.exec("UPDATE commands SET content=shell_command WHERE content='' AND shell_command<>''");}catch{}
+    try{const rows=this.db.prepare("SELECT id,type,content FROM commands WHERE command_sha256=''").all() as any[];const update=this.db.prepare('UPDATE commands SET command_sha256=? WHERE id=?');for(const row of rows)update.run(createHash('sha256').update(String(row.type)+'\\0'+String(row.content),'utf8').digest('hex'),row.id);}catch{}
     try{this.db.exec("UPDATE commands SET command_sha256=lower(hex(sha256(type || char(0) || content))) WHERE command_sha256='' AND content<>''");}catch{}
     try{this.db.exec("ALTER TABLE command_keys RENAME TO command_installations");}catch{}
     try{this.db.exec('ALTER TABLE command_installations ADD COLUMN remote_script_path TEXT NOT NULL DEFAULT \'\'');}catch{}
