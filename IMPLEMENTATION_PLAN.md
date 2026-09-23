@@ -558,3 +558,32 @@ run_shell("...")
 tool.
 
 This is the core property that makes the five-level authorization model meaningful.
+
+
+## SSH capability key model (implemented)
+
+The SSH layer now uses a two-tier credential model:
+
+1. Human-managed **master keys** are uploaded through the web UI and selected by each SSH target. Existing encrypted-at-rest key storage remains the master-key store.
+2. Each command can have one generated **per-command Ed25519 key**. Its private key is encrypted at rest and its public key is installed into the target user's `authorized_keys` with a forced command and `restrict`.
+3. Provisioning requires the target's master key and pinned host fingerprint. A passphrase-protected master key must be explicitly unlocked in the web UI; the passphrase is not persisted.
+4. Once provisioned, MCP execution uses the per-command key, so the master key can be locked without disabling already-provisioned commands.
+5. Command target/exact-command changes and destructive deletion of targets/commands are blocked while dependent per-command keys exist; the key must be removed first.
+6. The web UI exposes master-key upload/unlock/lock and per-command key creation/removal.
+
+Threat-boundary invariant:
+
+```text
+human master key
+      |
+      v
+provision exact command key
+      |
+      v
+authorized_keys: restrict,command="EXACT STORED COMMAND"
+      |
+      v
+MCP -> per-command private key -> SSH
+```
+
+The forced-command mechanism is an OpenSSH server-side restriction: the command supplied by the SSH client is ignored for a matching key, while `restrict` disables PTY, forwarding and user-rc capabilities. This makes the remote SSH server enforce the same predefined-capability boundary as farcmd itself.
