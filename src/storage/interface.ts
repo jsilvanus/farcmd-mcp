@@ -1,9 +1,8 @@
-export interface AuthorizationCodeRecord { code:string; clientId:string; redirectUri:string; challenge:string; subject:string; scope:string; expires:number; }
-export interface RefreshTokenRecord { token:string; clientId:string; subject:string; scope:string; expires:number; }
+import type { SqliteOAuthTokenStore } from '../oauth/tokens.js';
 export interface OAuthGrantLike { userId:string; clientId:string; clientName:string; visibleLevels:(1|2|3|4|5)[]; level5PermanentlyHidden:boolean; revokedAt?:number; lastUsedAt?:number; }
 export interface AuthStore {
-  saveAuthorizationCode(record:AuthorizationCodeRecord):void; consumeAuthorizationCode(code:string):AuthorizationCodeRecord|undefined;
-  saveRefreshToken(record:RefreshTokenRecord):void; getRefreshToken(token:string):RefreshTokenRecord|undefined;
+  /** Authorization codes and rotating refresh tokens (stored hashed). */
+  oauthTokens():SqliteOAuthTokenStore;
   getOAuthGrant(userId:string,clientId:string):OAuthGrantLike|undefined;
   upsertOAuthGrant(userId:string,clientId:string,clientName:string,visibleLevels:number[],level5PermanentlyHidden:boolean):void;
   revokeOAuthGrant(userId:string,clientId:string):void;

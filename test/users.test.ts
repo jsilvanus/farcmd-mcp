@@ -65,10 +65,10 @@ test('administrator-created users: validation, password change ends sessions, no
     assert.equal(user.email,'a@example.test');
     await assert.rejects(()=>f.admin.create({email:'a@example.test',name:'A',password:PASSWORD}),/already exists/);
     const s=await login(f.app,'a@example.test'); assert.equal(s.status,200);
-    f.store.saveRefreshToken({token:'rt-1',clientId:'c',subject:user.id,scope:'mcp',expires:Date.now()+60_000});
+    const rt_1=f.store.oauthTokens().issueRefreshToken({familyId:randomUUID(),clientId:'c',subject:user.id,scope:'mcp',expires:Date.now()+60_000});
     await f.admin.setPassword('a@example.test','a brand new password');
     assert.equal((await f.app.inject({method:'GET',url:'/api/auth/session',headers:{cookie:s.cookie}})).statusCode,401,'old web session ended');
-    assert.equal(f.store.getRefreshToken('rt-1'),undefined,'refresh tokens revoked');
+    assert.equal(f.store.oauthTokens().peekRefreshToken(rt_1),undefined,'refresh tokens revoked');
     assert.equal((await login(f.app,'a@example.test')).status,401);
     assert.equal((await login(f.app,'a@example.test','a brand new password')).status,200);
     const all=JSON.stringify(f.db.prepare('SELECT * FROM security_events').all());
@@ -83,19 +83,19 @@ test('a disabled user is refused on every path and can be re-enabled',async()=>{
     const user=await f.admin.create({email:'d@example.test',name:'Dee',password:PASSWORD});
     new SqliteOAuthGrantStore(f.db).upsert(user.id,'https://client.example/c.json','Client',[1],false);
     const web=await login(f.app,'d@example.test');
-    f.store.saveRefreshToken({token:'rt-d',clientId:'https://client.example/c.json',subject:user.id,scope:'mcp',expires:Date.now()+60_000});
+    const rt_d=f.store.oauthTokens().issueRefreshToken({familyId:randomUUID(),clientId:'https://client.example/c.json',subject:user.id,scope:'mcp',expires:Date.now()+60_000});
     const access=await issueAccessToken(JWT,ISSUER,RESOURCE,user.id,'https://client.example/c.json','mcp');
     assert.match(await mcpHealth(f.app,access),/\\"ok\\": ?true|"ok": ?true/,'MCP works while active');
-    const activeRefresh=await f.app.inject({method:'POST',url:'/oauth/token',payload:{grant_type:'refresh_token',refresh_token:'rt-d',client_id:'https://client.example/c.json'}});
+    const activeRefresh=await f.app.inject({method:'POST',url:'/oauth/token',payload:{grant_type:'refresh_token',refresh_token:rt_d,client_id:'https://client.example/c.json'}});
     assert.equal(activeRefresh.statusCode,200,'refresh works while active (control)');
 
     f.admin.setDisabled('d@example.test',true);
     const session=await f.app.inject({method:'GET',url:'/api/auth/session',headers:{cookie:web.cookie}});
     assert.equal(session.statusCode,401);
     const relogin=await login(f.app,'d@example.test'); assert.equal(relogin.status,403);
-    assert.equal(f.store.getRefreshToken('rt-d'),undefined,'refresh tokens revoked on disable');
-    f.store.saveRefreshToken({token:'rt-d2',clientId:'https://client.example/c.json',subject:user.id,scope:'mcp',expires:Date.now()+60_000});
-    const refresh=await f.app.inject({method:'POST',url:'/oauth/token',payload:{grant_type:'refresh_token',refresh_token:'rt-d2',client_id:'https://client.example/c.json'}});
+    assert.equal(f.store.oauthTokens().peekRefreshToken(rt_d),undefined,'refresh tokens revoked on disable');
+    const rt_d2=f.store.oauthTokens().issueRefreshToken({familyId:randomUUID(),clientId:'https://client.example/c.json',subject:user.id,scope:'mcp',expires:Date.now()+60_000});
+    const refresh=await f.app.inject({method:'POST',url:'/oauth/token',payload:{grant_type:'refresh_token',refresh_token:rt_d2,client_id:'https://client.example/c.json'}});
     assert.equal(refresh.statusCode,400); assert.equal(refresh.json().error,'invalid_grant');
     const mcp=await mcpHealth(f.app,access);
     assert.doesNotMatch(mcp,/"ok": ?true|\\"ok\\": ?true/); assert.match(mcp,/Authentication required/,'a still-valid access token is refused');

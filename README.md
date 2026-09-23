@@ -164,6 +164,16 @@ Immediately before a level 3, 4 or 5 command runs (after human approval or passw
 See [`docs/capability-integrity.md`](docs/capability-integrity.md) for the threat model, protocol, trust boundary, TOCTOU analysis and lifecycle. `sudo -E npm run test:e2e` runs the end-to-end tests against a real OpenSSH server.
 
 
+## OAuth tokens
+
+Access tokens are short-lived JWTs (1 hour). Refresh tokens:
+
+- **Rotate** on every use: the response carries a new refresh token and the old one stops working.
+- Belong to a **family** that expires 30 days after the original authorization; refreshing does not extend it. The user then authorizes again.
+- Are **reuse-detected**: presenting an already-used refresh token (a sign it was copied) revokes every live token in its family, and the event is audited as `oauth.refresh_token_reuse`. Authorization codes are single use in the same way (`oauth.code_reuse`).
+- Are stored only as **SHA-256 hashes**, as are authorization codes, so a copy of the database contains no usable tokens.
+- Are deleted when the OAuth grant is revoked in the web UI, when the password changes, and when the account is disabled or logged out with `farcmd-admin`.
+
 ## Audit log
 
 Security-relevant actions are recorded in an append-only audit log (`security_events`) and shown on the **Audit** page of the web UI (`GET /api/audit`, filterable by event, outcome and text).

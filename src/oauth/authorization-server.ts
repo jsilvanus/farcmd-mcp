@@ -4,6 +4,7 @@ import { isActiveUser, type AuthStore, type UserStore } from '../storage/interfa
 import { fetchCimdMetadata, isCimdClientId } from './cimd.js';
 import { randomToken, verifyS256 } from './pkce.js';
 import { issueAccessToken } from './jwt.js';
+import { REFRESH_TOKEN_LIFETIME_MS } from './tokens.js';
 
 const loginSessions=new Map<string,{userId:string;oauth:string;expires:number}>();
 const LEVELS=[1,2,3,4,5] as const;
@@ -48,13 +49,42 @@ export async function mountAuthorizationServer(app:FastifyInstance,issuer:string
   if(permanent5&&allowed.includes(5))return reply.code(400).type('text/html').send(page('Invalid selection','<h1>Level 5 cannot be both allowed and permanently prohibited.</h1>'));
   authStore.upsertOAuthGrant(user.id,q.client_id!,metadata.client_name,allowed,permanent5||!!existing?.level5PermanentlyHidden);
   authStore.recordSecurityEvent?.(user.id,q.client_id,'oauth.authorize',{clientName:metadata.client_name,decision:'approved',visibleLevels:allowed,level5PermanentlyHidden:permanent5||!!existing?.level5PermanentlyHidden,previousVisibleLevels:existing?.visibleLevels??null});
-  const code=randomToken();authStore.saveAuthorizationCode({code,clientId:q.client_id!,redirectUri:q.redirect_uri!,challenge:q.code_challenge!,subject:user.id,scope:q.scope??'mcp',expires:Date.now()+60_000});
+  const code=randomToken();authStore.oauthTokens().saveAuthorizationCode(code,{clientId:q.client_id!,redirectUri:q.redirect_uri!,challenge:q.code_challenge!,subject:user.id,scope:q.scope??'mcp',expires:Date.now()+60_000});
   target.searchParams.set('code',code);return reply.redirect(target.toString());
  });
  app.post('/oauth/token',async(request,reply)=>{
   const b=request.body as Record<string,string|undefined>;
-  if(b.grant_type==='authorization_code'){const code=b.code?authStore.consumeAuthorizationCode(b.code):undefined;const grant=code?authStore.getOAuthGrant(code.subject,code.clientId):undefined;if(!code||!grant||grant.revokedAt||!isActiveUser(users.getUser(code.subject))||b.client_id!==code.clientId||b.redirect_uri!==code.redirectUri||!b.code_verifier||!verifyS256(b.code_verifier,code.challenge)){authStore.recordSecurityEvent?.(code?.subject,b.client_id,'oauth.token',{grantType:'authorization_code',reason:!code?'unknown or expired code':grant?.revokedAt?'grant revoked':!isActiveUser(users.getUser(code.subject))?'account disabled or deleted':'binding mismatch'},'failure');return reply.code(400).send({error:'invalid_grant'});}authStore.recordSecurityEvent?.(code.subject,code.clientId,'oauth.token',{grantType:'authorization_code',scope:code.scope});authStore.touchOAuthGrant(code.subject,code.clientId);const access=await issueAccessToken(secret,issuer,resource,code.subject,code.clientId,code.scope);const refreshToken=randomToken();authStore.saveRefreshToken({token:refreshToken,clientId:code.clientId,subject:code.subject,scope:code.scope,expires:Date.now()+30*86_400_000});return {access_token:access,token_type:'Bearer',expires_in:3600,refresh_token:refreshToken,scope:code.scope};}
-  if(b.grant_type==='refresh_token'){const refreshToken=b.refresh_token?authStore.getRefreshToken(b.refresh_token):undefined;const grant=refreshToken?authStore.getOAuthGrant(refreshToken.subject,refreshToken.clientId):undefined;if(!refreshToken||!grant||grant.revokedAt||!isActiveUser(users.getUser(refreshToken.subject))||b.client_id!==refreshToken.clientId){authStore.recordSecurityEvent?.(refreshToken?.subject,b.client_id,'oauth.token',{grantType:'refresh_token',reason:!refreshToken?'unknown or expired refresh token':grant?.revokedAt?'grant revoked':!isActiveUser(users.getUser(refreshToken.subject))?'account disabled or deleted':'client mismatch'},'failure');return reply.code(400).send({error:'invalid_grant'});}authStore.recordSecurityEvent?.(refreshToken.subject,refreshToken.clientId,'oauth.token',{grantType:'refresh_token'});authStore.touchOAuthGrant(refreshToken.subject,refreshToken.clientId);const access=await issueAccessToken(secret,issuer,resource,refreshToken.subject,refreshToken.clientId,refreshToken.scope);return {access_token:access,token_type:'Bearer',expires_in:3600,scope:refreshToken.scope};}
+  const tokens=authStore.oauthTokens();
+  const issued=(subject:string,clientId:string,grantType:string,extra:Record<string,unknown>={})=>authStore.recordSecurityEvent?.(subject,clientId,'oauth.token',{grantType,...extra});
+  const denied=(subject:string|undefined,clientId:string|undefined,grantType:string,reason:string,event='oauth.token')=>{authStore.recordSecurityEvent?.(subject,clientId,event,{grantType,reason},'failure');return reply.code(400).send({error:'invalid_grant'});};
+  if(b.grant_type==='authorization_code'){
+   const redemption=b.code?tokens.redeemAuthorizationCode(b.code):{status:'unknown' as const};
+   if(redemption.status==='reused')return denied(redemption.code.subject,redemption.code.clientId,'authorization_code','authorization code reused; '+redemption.revokedTokens+' refresh token(s) issued from it revoked','oauth.code_reuse');
+   if(redemption.status!=='ok')return denied(undefined,b.client_id,'authorization_code',redemption.status==='expired'?'expired code':'unknown code');
+   const code=redemption.code; const grant=authStore.getOAuthGrant(code.subject,code.clientId);
+   if(!grant||grant.revokedAt)return denied(code.subject,code.clientId,'authorization_code','grant revoked');
+   if(!isActiveUser(users.getUser(code.subject)))return denied(code.subject,code.clientId,'authorization_code','account disabled or deleted');
+   if(b.client_id!==code.clientId||b.redirect_uri!==code.redirectUri||!b.code_verifier||!verifyS256(b.code_verifier,code.challenge))return denied(code.subject,b.client_id,'authorization_code','binding mismatch');
+   issued(code.subject,code.clientId,'authorization_code',{scope:code.scope});authStore.touchOAuthGrant(code.subject,code.clientId);
+   const access=await issueAccessToken(secret,issuer,resource,code.subject,code.clientId,code.scope);
+   const refreshToken=tokens.issueRefreshToken({familyId:code.familyId,clientId:code.clientId,subject:code.subject,scope:code.scope,expires:Date.now()+REFRESH_TOKEN_LIFETIME_MS});
+   return {access_token:access,token_type:'Bearer',expires_in:3600,refresh_token:refreshToken,scope:code.scope};
+  }
+  if(b.grant_type==='refresh_token'){
+   // Validate client, grant and account before consuming, so a mismatched request cannot burn a valid token.
+   const current=b.refresh_token?tokens.peekRefreshToken(b.refresh_token):undefined;
+   if(!current||!b.refresh_token)return denied(undefined,b.client_id,'refresh_token','unknown or expired refresh token');
+   if(b.client_id!==current.clientId)return denied(current.subject,b.client_id,'refresh_token','client mismatch');
+   const grant=authStore.getOAuthGrant(current.subject,current.clientId);
+   if(!grant||grant.revokedAt)return denied(current.subject,current.clientId,'refresh_token','grant revoked');
+   if(!isActiveUser(users.getUser(current.subject)))return denied(current.subject,current.clientId,'refresh_token','account disabled or deleted');
+   const rotation=tokens.rotateRefreshToken(b.refresh_token);
+   if(rotation.status==='reused')return denied(rotation.previous.subject,rotation.previous.clientId,'refresh_token','refresh token reused; token family revoked ('+rotation.revokedTokens+' active token(s))','oauth.refresh_token_reuse');
+   if(rotation.status!=='ok')return denied(current.subject,current.clientId,'refresh_token',rotation.status+' refresh token');
+   issued(current.subject,current.clientId,'refresh_token');authStore.touchOAuthGrant(current.subject,current.clientId);
+   const access=await issueAccessToken(secret,issuer,resource,current.subject,current.clientId,current.scope);
+   return {access_token:access,token_type:'Bearer',expires_in:3600,refresh_token:rotation.token,scope:current.scope};
+  }
   return reply.code(400).send({error:'unsupported_grant_type'});
  });
 }
