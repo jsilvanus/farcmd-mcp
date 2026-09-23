@@ -47,7 +47,7 @@ export class SqliteRemoteCapabilityLedgerStore {
     const rows=(status?this.db.prepare('SELECT * FROM remote_capability_ledger WHERE user_id=? AND status=? ORDER BY created_at DESC'):this.db.prepare('SELECT * FROM remote_capability_ledger WHERE user_id=? ORDER BY created_at DESC')).all(...(status?[userId,status]:[userId])) as any[];
     return rows.map(this.map).filter((x):x is RemoteCapabilityLedgerRecord=>x!==undefined);
   }
-  pendingForTarget(userId:string,targetId:string):RemoteCapabilityLedgerRecord[]{return this.list(userId,'pending_removal').filter(x=>x.targetId===targetId);}
+  pendingForTarget(userId:string,targetId:string):RemoteCapabilityLedgerRecord[]{const rows=this.db.prepare("SELECT * FROM remote_capability_ledger WHERE user_id=? AND target_id=? AND status IN ('pending_removal','removal_failed') ORDER BY created_at").all(userId,targetId) as any[];return rows.map(this.map).filter((x):x is RemoteCapabilityLedgerRecord=>x!==undefined);}
   markAttempt(userId:string,id:string,error?:string):void{
     this.db.prepare('UPDATE remote_capability_ledger SET status=?,last_attempt_at=?,last_error=?,attempt_count=attempt_count+1 WHERE user_id=? AND id=?').run(error?'removal_failed':'removed',Date.now(),error??null,userId,id);
     if(!error)this.db.prepare('UPDATE remote_capability_ledger SET removed_at=? WHERE user_id=? AND id=?').run(Date.now(),userId,id);
