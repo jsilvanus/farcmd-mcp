@@ -22,7 +22,7 @@ export class SqliteAuthStore implements AuthStore, WebSessionStore {
       'CREATE TABLE IF NOT EXISTS security_events (id TEXT PRIMARY KEY,user_id TEXT,client_id TEXT,event TEXT NOT NULL,details TEXT,created_at INTEGER NOT NULL);' +
       'CREATE TABLE IF NOT EXISTS pending_executions (token TEXT PRIMARY KEY,user_id TEXT NOT NULL,client_id TEXT NOT NULL,command_id TEXT NOT NULL,level INTEGER NOT NULL,created_at INTEGER NOT NULL,expires_at INTEGER NOT NULL,status TEXT NOT NULL,exit_code INTEGER,stdout TEXT,stderr TEXT,duration_ms INTEGER,signal TEXT);'
     );
-        try{this.db.exec('ALTER TABLE commands ADD COLUMN execution_password_hash TEXT');}catch{}
+    try{this.db.exec('ALTER TABLE commands ADD COLUMN execution_password_hash TEXT');}catch{}
     try{this.db.exec('ALTER TABLE pending_executions ADD COLUMN exit_code INTEGER');}catch{}
     try{this.db.exec('ALTER TABLE pending_executions ADD COLUMN stdout TEXT');}catch{}
     try{this.db.exec('ALTER TABLE pending_executions ADD COLUMN stderr TEXT');}catch{}
@@ -47,7 +47,10 @@ export class SqliteAuthStore implements AuthStore, WebSessionStore {
   saveRefreshToken(r:RefreshTokenRecord):void{this.db.prepare('INSERT INTO refresh_tokens (token,client_id,subject,scope,expires) VALUES (?,?,?,?,?)').run(r.token,r.clientId,r.subject,r.scope,r.expires);}
   getRefreshToken(token:string):RefreshTokenRecord|undefined{const r=this.db.prepare('SELECT * FROM refresh_tokens WHERE token=?').get(token) as any;if(!r||r.expires<Date.now()){if(r)this.db.prepare('DELETE FROM refresh_tokens WHERE token=?').run(token);return undefined;}return {token:r.token,clientId:r.client_id,subject:r.subject,scope:r.scope,expires:r.expires};}
   saveWebSession(r:WebSessionRecord):void{this.db.prepare('INSERT INTO web_sessions (token,user_id,expires) VALUES (?,?,?)').run(r.token,r.userId,r.expires);}
-  getWebSession(token:string):WebSessionRecord|undefined{const r=this.db.prepare('SELECT * FROM web_sessions WHERE token=?').get(token) as any;return r?{token:r.token,userId:r.user_id,expires:r.expires} as McpUser;}
+  getWebSession(token:string):WebSessionRecord|undefined{
+    const r=this.db.prepare('SELECT * FROM web_sessions WHERE token=?').get(token) as any;
+    return r?{token:r.token,userId:r.user_id,expires:r.expires}:undefined;
+  }
   deleteWebSession(token:string):void{this.db.prepare('DELETE FROM web_sessions WHERE token=?').run(token);}
 }
 export class SqliteUserStore implements UserStore {
