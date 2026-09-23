@@ -13,7 +13,7 @@ import { FarcmdConnectorImpl } from '../src/connector.js';
 import { encryptSecret, decryptSecret } from '../src/crypto-at-rest.js';
 import { confirmationForLevel } from '../src/execution.js';
 import { SqliteCommandKeyStore } from '../src/storage/command-keys.js';
-import { buildCommandRestrictedAuthorizedKey, buildFarcmdScript, farcmdScriptPath } from '../src/ssh.js';
+import { buildCommandRestrictedAuthorizedKey, buildFarcmdScript, farcmdScriptPath, sha256Hex } from '../src/ssh.js';
 
 function fixture(){
   const dir=mkdtempSync(join(tmpdir(),'farcmd-test-'));
@@ -198,4 +198,14 @@ test('connector creates L4 confirmation without executing SSH',async()=>{
     assert.equal('pending' in result,true);
     if('pending' in result) assert.equal(result.level,4);
   } finally { cleanup(f); }
+});
+
+
+test('integrity baselines hash command content, remote script and authorized key line',()=>{
+  const content='echo hi';
+  const script=buildFarcmdScript('https://mcp.example.com',randomUUID(),'shell',content);
+  const key=buildCommandRestrictedAuthorizedKey('ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAItest','~/.ssh/farcmd/mcp.example.com-'+randomUUID()+'.sh');
+  assert.equal(sha256Hex(script),sha256Hex(script));
+  assert.notEqual(sha256Hex(script),sha256Hex(script+'x'));
+  assert.notEqual(sha256Hex(key),sha256Hex(key+'x'));
 });
