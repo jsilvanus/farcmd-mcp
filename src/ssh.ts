@@ -79,3 +79,29 @@ export async function executeSshCommand(target:SshTargetConfig,key:SshKeyMateria
     try{client.connect(config);}catch(error){reject(error);}
   });
 }
+
+
+export function buildCommandRestrictedAuthorizedKey(publicKey:string,command:string):string {
+  if(/\r|\n/.test(publicKey)||/\r|\n/.test(command))throw new Error('SSH public key and command must be single-line values.');
+  if(!/^ssh-(?:ed25519|rsa)\\s+\\S+/.test(publicKey))throw new Error('Unsupported generated SSH public key.');
+  const escapedCommand=command.replaceAll('\\\\','\\\\\\\\').replaceAll('"','\\\\"');
+  return 'restrict,command="'+escapedCommand+'" '+publicKey.trim();
+}
+
+async function executeAsMaster(target:SshTargetConfig,key:SshKeyMaterial,command:string):Promise<SshExecResult>{
+  const result=await executeSshCommand(target,key,command,30_000);
+  if(result.exitCode!==0)throw new Error(result.stderr.trim()||'Remote SSH operation failed.');
+  return result;
+}
+
+export async function installCommandRestrictedKey(target:SshTargetConfig,masterKey:SshKeyMaterial,authorizedKey:string):Promise<void>{
+  const encoded=Buffer.from(authorizedKey,'utf8').toString('base64');
+  const script='set -eu; umask 077; mkdir -p ~/.ssh; chmod 700 ~/.ssh; touch ~/.ssh/authorized_keys; chmod 600 ~/.ssh/authorized_keys; line=$(printf %s '+encoded+' | base64 -d); if ! grep -Fqx -- "$line" ~/.ssh/authorized_keys; then printf "%s\\n" "$line" >> ~/.ssh/authorized_keys; fi';
+  await executeAsMaster(target,masterKey,script);
+}
+
+export async function removeCommandRestrictedKey(target:SshTargetConfig,masterKey:SshKeyMaterial,authorizedKey:string):Promise<void>{
+  const encoded=Buffer.from(authorizedKey,'utf8').toString('base64');
+  const script='set -eu; if [ -f ~/.ssh/authorized_keys ]; then line=$(printf %s '+encoded+' | base64 -d); tmp=$(mktemp ~/.ssh/authorized_keys.farcmd.XXXXXX); trap "rm -f \"$tmp\"" EXIT; if grep -Fvx -- "$line" ~/.ssh/authorized_keys > "$tmp"; then :; else code=$?; [ "$code" -eq 1 ]; fi; chmod 600 "$tmp"; mv "$tmp" ~/.ssh/authorized_keys; trap - EXIT; fi';
+  await executeAsMaster(target,masterKey,script);
+}
