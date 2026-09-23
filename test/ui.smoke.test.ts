@@ -43,12 +43,12 @@ test('web UI: sign in, visit every page, toggle MCP access, sign out',{skip:!exi
     await page.fill('input[name=email]','ui@example.test'); await page.fill('input[name=password]','wrong password!!');
     await page.click('#login button'); await page.getByText('Invalid email or password').waitFor();
     await page.fill('input[name=password]',PASSWORD); await page.click('#login button');
-    await page.getByRole('heading',{name:'Dashboard'}).waitFor();
-    // MCP access switch: off, then on again, through the real UI and API (CSRF header included).
-    if(process.env.FARCMD_UI_SCREENSHOTS)await page.screenshot({path:join(process.env.FARCMD_UI_SCREENSHOTS,'dashboard-mcp-on.png'),fullPage:true});
+    await page.getByRole('heading',{name:'Commands'}).waitFor(); // the page after sign-in
+    // MCP access switch, at the top of Commands: off, then on again, through the real UI and API (CSRF header included).
+    if(process.env.FARCMD_UI_SCREENSHOTS)await page.screenshot({path:join(process.env.FARCMD_UI_SCREENSHOTS,'commands-mcp-on.png'),fullPage:true});
     await page.getByRole('button',{name:'Turn off MCP access'}).click();
     await page.getByRole('button',{name:'Turn on MCP access'}).waitFor();
-    if(process.env.FARCMD_UI_SCREENSHOTS)await page.screenshot({path:join(process.env.FARCMD_UI_SCREENSHOTS,'dashboard-mcp-off.png'),fullPage:true});
+    if(process.env.FARCMD_UI_SCREENSHOTS)await page.screenshot({path:join(process.env.FARCMD_UI_SCREENSHOTS,'commands-mcp-off.png'),fullPage:true});
     assert.equal(new McpAccessPolicy(db).status(user.id).userEnabled,false);
     await page.getByRole('button',{name:'Turn on MCP access'}).click();
     await page.getByRole('button',{name:'Turn off MCP access'}).waitFor();
@@ -81,7 +81,7 @@ test('web UI: sign in, visit every page, toggle MCP access, sign out',{skip:!exi
     await dialog.getByLabel('Show output after approval (levels 4–5)').check(); await dialog.getByRole('button',{name:'Save'}).click();
     await dialog.waitFor({state:'detached'});
     if(process.env.FARCMD_UI_SCREENSHOTS)await page.screenshot({path:join(process.env.FARCMD_UI_SCREENSHOTS,'commands.png'),fullPage:true});
-    for(const [link,heading] of [['SSH',/SSH/],['Commands',/Commands/],['OAuth Sources',/OAuth Sources/],['History',/History/],['Audit',/Audit log/],['Settings',/Settings|Account/],['Dashboard',/Dashboard/]] as const){
+    for(const [link,heading] of [['SSH',/SSH/],['Commands',/Commands/],['OAuth Sources',/OAuth Sources/],['History',/History/],['Audit',/Audit log/],['Settings',/Settings|Account/]] as const){
       await page.getByRole('link',{name:link,exact:true}).click();
       await page.getByRole('heading',{name:heading}).first().waitFor();
     }
