@@ -80,6 +80,25 @@ The production Fastify server serves `dist/web`.
 
 Users can create an account, sign in, sign out, and update their name/email. Browser sessions are stored in SQLite as opaque random tokens and sent in an HttpOnly, SameSite=Lax cookie. Passwords are hashed with Argon2id.
 
+**Registration is off by default.** New accounts are created by the operator with the `farcmd-admin` CLI. Self-service sign-up in the web UI can be switched on with `farcmd-admin registration enable`; the setting lives in the database (`app_settings.registration_enabled`), and the sign-up link is shown only while it is on.
+
+### User administration (`farcmd-admin`)
+
+The CLI works directly on the database, so run it on the server with the same `STORAGE_PATH` and `FARCMD_ENCRYPTION_KEY` as the service (for example `node --env-file=.env dist/cli/admin.js …`, or `npm run admin -- …` in development). Every change goes into the audit log with actor `system`.
+
+```sh
+farcmd-admin user list [--json]
+farcmd-admin user create --email alice@example.org --name "Alice"      # prompts for the password
+farcmd-admin user password --email alice@example.org                    # ends all sessions and refresh tokens
+farcmd-admin user disable --email alice@example.org                     # refuses web, OAuth and MCP at once; reversible
+farcmd-admin user enable --email alice@example.org
+farcmd-admin user logout --email alice@example.org                      # ends all web sessions and refresh tokens
+farcmd-admin user delete --email alice@example.org [--yes] [--force]
+farcmd-admin registration status|enable|disable
+```
+
+Passwords are never accepted as arguments, because they would end up in shell history and the process list. They are read from a hidden prompt, or from the first line of stdin with `--password-stdin` (e.g. `printf '%s\n' "$PW" | farcmd-admin user create … --password-stdin`). `user delete` removes the user and all of their farcmd data, but not the audit log. It refuses while the user still has capabilities or verifiers installed on remote hosts (remove them in the web UI first) unless `--force` is given. A disabled user's existing MCP access tokens are refused immediately, not just when they expire.
+
 Mutating browser API requests validate the `Origin` header when present. Login and registration have a basic per-IP rate limit. This is intentionally a baseline; Phase 8 will add full CSRF strategy, stronger abuse controls, security event logging, and operational hardening.
 
 The Phase 1 development bootstrap account remains optional: set `MCP_DEFAULT_USER_PASSWORD` to create it. Omitting that variable is now valid when using normal account registration.

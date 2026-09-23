@@ -13,8 +13,9 @@
     "dev": "concurrently -k \"tsx watch src/server.ts\" \"vite --host 0.0.0.0\"",
     "start": "node dist/server.js",
     "build:web": "vite build",
-    "test": "node --import tsx --test test/security.test.ts test/verification.test.ts test/audit.test.ts",
-    "test:e2e": "node --import tsx --test test/integrity.e2e.test.ts"
+    "test": "node --import tsx --test test/security.test.ts test/verification.test.ts test/audit.test.ts test/users.test.ts",
+    "test:e2e": "node --import tsx --test test/integrity.e2e.test.ts",
+    "admin": "node --disable-warning=ExperimentalWarning --import tsx src/cli/admin.ts"
   },
   "dependencies": {
     "@fastify/formbody": "^8.0.2",
@@ -34,5 +35,8 @@
     "vite": "^7.1.5",
     "concurrently": "^9.1.2",
     "@types/ssh2": "^1.15.6"
+  },
+  "bin": {
+    "farcmd-admin": "dist/cli/admin.js"
   }
 }

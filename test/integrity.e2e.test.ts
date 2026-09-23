@@ -69,6 +69,7 @@ test('capability integrity verification end to end',{skip:skipReason,timeout:300
 
     // ---------------------------------------------------------------- farcmd setup through the web API
     const store=new SqliteAuthStore(join(dir,'app.sqlite')); const db=store.getDatabase();
+    const { SqliteSettingsStore }=await import('../src/storage/settings.js'); new SqliteSettingsStore(db).setRegistrationEnabled(true);
     const users=new SqliteUserStore(db);
     const app=Fastify(); await app.register(formbody); await app.register(cookie); await mountWebApi(app,users,store);
     const reg=await app.inject({method:'POST',url:'/api/auth/register',payload:{name:'E2E',email:account+'@example.test',password:'correct horse battery staple'}});

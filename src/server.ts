@@ -11,6 +11,7 @@ import { mountOAuthMetadata } from './oauth-metadata.js';
 import { mountAuthorizationServer } from './oauth/authorization-server.js';
 import { mountWebApi } from './web-api.js';
 import { SqliteAuthStore, SqliteUserStore } from './storage/sqlite.js';
+import { isActiveUser } from './storage/interface.js';
 import { auditRetentionMs } from './audit.js';
 
 const port=Number(process.env.PORT??'5999');
@@ -37,7 +38,7 @@ await app.register(formbody);await app.register(cookie);await mountWebApi(app,us
 if(process.env.NODE_ENV==='production')await app.register(fastifyStatic,{root:join(process.cwd(),'dist/web'),prefix:'/'});
 await mountOAuthMetadata(app,publicUrl);
 await mountAuthorizationServer(app,publicUrl,publicUrl+'/mcp',secret,store,users);
-await mountMcpHttp(app,{connector:new FarcmdConnectorImpl(store.getDatabase(),publicUrl),publicUrl,jwtSecret:secret,resource:publicUrl+'/mcp'});
+await mountMcpHttp(app,{connector:new FarcmdConnectorImpl(store.getDatabase(),publicUrl),publicUrl,jwtSecret:secret,resource:publicUrl+'/mcp',isUserActive:id=>isActiveUser(users.getUser(id))});
 app.get('/health',async()=>({ok:true}));
 app.get('/',async(_request,reply)=>{if(process.env.NODE_ENV==='production')return reply.sendFile('index.html');return {name:'farcmd-mcp',version:'0.2.0',mcp:'/mcp',web:'/'};});
 await app.listen({host:process.env.HOST??'0.0.0.0',port});

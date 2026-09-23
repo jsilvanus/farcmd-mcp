@@ -1,7 +1,8 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { hash, verify } from '@node-rs/argon2';
 import { randomToken } from './oauth/pkce.js';
-import type { UserStore, WebSessionStore } from './storage/interface.js';
+import { isActiveUser, type UserStore, type WebSessionStore } from './storage/interface.js';
+import { SqliteSettingsStore } from './storage/settings.js';
 import { WebSessionService } from './web-session.js';
 import { SqliteSshStore } from './storage/ssh.js';
 import { decryptSecret, encryptSecret } from './crypto-at-rest.js';
@@ -57,7 +58,7 @@ async function requireUser(request:FastifyRequest, reply:FastifyReply, users:Use
   const session=sessionFrom(request,sessions);
   if (!session) { reply.code(401).send({error:'Authentication required'}); return undefined; }
   const user=users.getUser(session.userId);
-  if (!user) { sessions.delete(session.token); reply.clearCookie('farcmd_session',{path:'/'}); reply.code(401).send({error:'Authentication required'}); return undefined; }
+  if (!isActiveUser(user)) { sessions.delete(session.token); reply.clearCookie('farcmd_session',{path:'/'}); reply.code(401).send({error:user?'This account is disabled.':'Authentication required'}); return undefined; }
   return user;
 }
 
@@ -103,6 +104,8 @@ export async function mountWebApi(app:FastifyInstance, users:UserStore, sessionS
   const sshDb=(sessionStore as any).getDatabase?.();
   if (!sshDb) throw new Error('Web session store must expose the application database');
   const audit=new AuditLog(sshDb);
+  const settings=new SqliteSettingsStore(sshDb);
+  app.get('/api/auth/config',async()=>({registrationEnabled:settings.registrationEnabled()}));
   // Audit trail for every state-changing (and sensitive read) web API call. The acting user is resolved
   // from the session before the handler runs, so logout and account deletion are attributed correctly.
   app.addHook('onRequest',async request=>{const token=request.cookies?.farcmd_session;request.auditUserId=token?sessions.get(token)?.userId:undefined;});
@@ -329,6 +332,7 @@ export async function mountWebApi(app:FastifyInstance, users:UserStore, sessionS
     // Failed attempts are attributed to the targeted account (if it exists) so its owner can see them.
     request.auditUserId=user?.id;
     if(!user?.passwordHash || !(await verify(user.passwordHash,password))) return reply.code(401).send({error:'Invalid email or password'});
+    if(!isActiveUser(user)) return reply.code(403).send({error:'This account is disabled.'});
     const token=sessions.create(user.id);
     reply.setCookie('farcmd_session',token,cookieOptions());
     return {user:publicUser(user)};
@@ -339,6 +343,8 @@ export async function mountWebApi(app:FastifyInstance, users:UserStore, sessionS
     return {ok:true};
   });
   app.post('/api/auth/register',async (request,reply)=>{
+    // Self-service registration is off unless the operator enabled it (farcmd-admin registration enable).
+    if(!settings.registrationEnabled()) return reply.code(403).send({error:'Registration is disabled. Ask the administrator for an account.'});
     const ip=request.ip; if(!rateLimit('register:'+ip)) return reply.code(429).send({error:'Too many attempts. Try again later.'});
     const b=request.body as Record<string,unknown>;
     const name=typeof b.name==='string'?b.name.trim():'';

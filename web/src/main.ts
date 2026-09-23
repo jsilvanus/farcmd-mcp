@@ -28,7 +28,9 @@ function shell(title:string, body:string) {
 
 function render(page='dashboard') {
   if (!user) {
-    shell('Sign in', '<form id="login"><label>Email<input name="email" type="email" required autocomplete="username"></label><label>Password<input name="password" type="password" required autocomplete="current-password"></label><button>Sign in</button></form><p id="error"></p><p><a href="#" id="register">Create an account</a></p>');
+    shell('Sign in', '<form id="login"><label>Email<input name="email" type="email" required autocomplete="username"></label><label>Password<input name="password" type="password" required autocomplete="current-password"></label><button>Sign in</button></form><p id="error"></p><p id="register-row" hidden><a href="#" id="register">Create an account</a></p><p id="register-closed" hidden><small>New accounts are created by the administrator.</small></p>');
+    // Self-service registration is shown only when the operator enabled it (farcmd-admin registration enable).
+    api('/api/auth/config').then(c=>{document.querySelector<HTMLElement>(c.registrationEnabled?'#register-row':'#register-closed')?.removeAttribute('hidden');}).catch(()=>undefined);
     document.querySelector<HTMLFormElement>('#login')!.onsubmit = async e => {
       e.preventDefault();
       try { const f=new FormData(e.currentTarget); const r=await api('/api/auth/login',{method:'POST',body:JSON.stringify({email:f.get('email'),password:f.get('password')})}); user=r.user; const params=new URLSearchParams(location.search); if(params.get('page')==='confirm'&&params.get('token')){(window as any).__confirmToken=params.get('token');render('confirm');} else if(params.get('page')==='unlock'&&params.get('key')){(window as any).__unlockKeyId=params.get('key');render('unlock');} else render(); }
