@@ -70,7 +70,7 @@ export async function mountWebApi(app:FastifyInstance, users:UserStore, sessionS
   const connector=new FarcmdConnectorImpl(sshDb,process.env.MCP_PUBLIC_URL ?? `http://localhost:${process.env.PORT ?? '5999'}`);
   app.get('/api/ssh/keys',async (request,reply)=>{
     const user=await requireUser(request,reply,users,sessions); if(!user)return;
-    return {keys:ssh.listKeys(user.id).map(k=>({id:k.id,name:k.name,fingerprint:k.fingerprint,createdAt:k.createdAt,updatedAt:k.updatedAt,locked:getSshPassphrase(user.id,k.id)===undefined}))};
+    return {keys:ssh.listKeys(user.id).map(k=>{const privateKey=decryptSecret(k.encryptedPrivateKey,'ssh-key:'+user.id+':'+k.id);const inspected=inspectPrivateKey(privateKey);const passphraseRequired=inspected.encrypted;return {id:k.id,name:k.name,fingerprint:k.fingerprint,createdAt:k.createdAt,updatedAt:k.updatedAt,passphraseRequired,locked:passphraseRequired&&getSshPassphrase(user.id,k.id)===undefined};})};
   });
   app.post('/api/ssh/keys',async (request,reply)=>{
     const user=await requireUser(request,reply,users,sessions); if(!user)return;
