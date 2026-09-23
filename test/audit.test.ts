@@ -122,3 +122,31 @@ test('web API actions are recorded per user without secrets and are readable via
     assert.equal(verified.ok,true); assert.match(verified.headHash,/^[0-9a-f]{64}$/);
   }finally{rmSync(f.dir,{recursive:true,force:true});}
 });
+
+test('clearing a level 5 password by editing the command is recorded as its own event',async()=>{
+  const f=fixture();
+  try{
+    const app=Fastify(); await app.register(formbody); await app.register(cookie); asWebClient(app); await mountWebApi(app,new SqliteUserStore(f.db),f.store);
+    const reg=await app.inject({method:'POST',url:'/api/auth/register',payload:{name:'Owner',email:'owner@example.test',password:'correct horse battery staple'}});
+    const cookieHeader='farcmd_session='+reg.cookies.find(c=>c.name==='farcmd_session')!.value;
+    const api=(method:any,url:string,payload?:unknown)=>app.inject({method,url,headers:{cookie:cookieHeader},...(payload!==undefined?{payload:payload as any}:{})});
+    const master=ssh2.utils.generateKeyPairSync('ed25519',{comment:'audit-test'});
+    const keyId=(await api('POST','/api/ssh/keys',{name:'master',privateKey:String(master.private)})).json().key.id;
+    const targetId=(await api('POST','/api/ssh/targets',{name:'t',hostname:'192.0.2.1',port:22,username:'deploy',sshKeyId:keyId})).json().target.id;
+    const commandId=(await api('POST','/api/commands',{name:'wipe',description:'d',type:'shell',content:'rm -rf /srv/cache',targetId,level:5})).json().command.id;
+    const cleared=()=>(f.db.prepare("SELECT details FROM security_events WHERE event='command.level5_password_cleared' ORDER BY seq").all() as any[]).map(r=>JSON.parse(r.details).reasons);
+    assert.equal((await api('PATCH','/api/commands/'+commandId,{content:'rm -rf /srv/tmp'})).statusCode,200);
+    assert.deepEqual(cleared(),[],'nothing to clear before a password is set');
+    assert.equal((await api('POST','/api/commands/'+commandId+'/execution-password',{password:'level five password'})).statusCode,200);
+    assert.equal((await api('PATCH','/api/commands/'+commandId,{name:'wipe cache'})).statusCode,200);
+    assert.deepEqual(cleared(),[],'a rename keeps the password');
+    assert.equal((await api('PATCH','/api/commands/'+commandId,{content:'rm -rf /srv/cache/*'})).statusCode,200);
+    assert.equal((await api('POST','/api/commands/'+commandId+'/execution-password',{password:'level five password'})).statusCode,200);
+    assert.equal((await api('PATCH','/api/commands/'+commandId,{level:4})).statusCode,200);
+    assert.deepEqual(cleared(),[['content_changed'],['level_changed']]);
+    const commands=(await api('GET','/api/commands')).json().commands; assert.equal(commands[0].hasExecutionPassword,undefined); // level 4: no password
+    const events=(f.db.prepare("SELECT event FROM security_events WHERE event LIKE 'command.%' ORDER BY seq").all() as any[]).map(r=>r.event);
+    assert.deepEqual(events.slice(-2),['command.level5_password_cleared','command.update']);
+    assert.ok(!JSON.stringify(f.db.prepare('SELECT * FROM security_events').all()).includes('level five password'));
+  }finally{rmSync(f.dir,{recursive:true,force:true});}
+});
