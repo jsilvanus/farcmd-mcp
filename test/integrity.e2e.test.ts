@@ -332,6 +332,12 @@ sys.stdout.write(body + "mac " + hmac.new(os.urandom(32), body.encode(), hashlib
       must('sh -s',removed.body.uninstallScript);
       assert.equal(existsSync(paths.program)||existsSync(paths.secret)||existsSync(paths.sudoers),false);
     });
+    await t.test('the audit trail recorded the whole run and its chain verifies',{timeout:60_000},async()=>{
+      const verified=(await api('GET','/api/audit/verify')).body; assert.equal(verified.ok,true,JSON.stringify(verified));
+      const events=new Set((db.prepare('SELECT event||\':\'||outcome AS e FROM security_events WHERE user_id=?').all(userId) as any[]).map(r=>r.e));
+      for(const e of ['verifier.install:failure','verifier.install:success','integrity.verification_blocked:failure','integrity.verification_passed:success','command.execute:success','command.confirmation_executed:success','ssh_key.delete:success','verifier.manual_script:success','verifier.remove:success'])assert.ok(events.has(e),'missing '+e);
+      assert.ok(!JSON.stringify(db.prepare('SELECT * FROM security_events').all()).includes('Sudo-Pa55word'));
+    });
   }finally{
     if(sshd&&sshd.exitCode===null){const exited=new Promise(r=>sshd!.once('exit',r));sshd.kill();await exited;}
     sh('pkill -KILL -u '+account+' 2>/dev/null; pkill -KILL -u '+admin+' 2>/dev/null; sleep 0.2'); sh('userdel -r '+admin+' 2>/dev/null');

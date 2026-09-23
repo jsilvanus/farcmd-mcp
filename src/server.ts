@@ -11,6 +11,7 @@ import { mountOAuthMetadata } from './oauth-metadata.js';
 import { mountAuthorizationServer } from './oauth/authorization-server.js';
 import { mountWebApi } from './web-api.js';
 import { SqliteAuthStore, SqliteUserStore } from './storage/sqlite.js';
+import { auditRetentionMs } from './audit.js';
 
 const port=Number(process.env.PORT??'5999');
 const publicUrl=process.env.MCP_PUBLIC_URL??('http://localhost:'+port);
@@ -27,6 +28,9 @@ const users=new SqliteUserStore(store.getDatabase());
 const defaultUserEmail=process.env.MCP_DEFAULT_USER_EMAIL??'demo@example.com';
 const existingDefault=users.getUserByEmail(defaultUserEmail);
 if(!existingDefault&&defaultUserPassword){users.createUser({id:process.env.MCP_DEFAULT_USER_ID??randomUUID(),name:'Default User',email:defaultUserEmail,passwordHash:await hash(defaultUserPassword,{algorithm:2}),createdAt:Date.now()});}
+// Audit log retention (FARCMD_AUDIT_RETENTION_DAYS, default 365, 0 = keep forever): prune at start and daily.
+const retentionMs=auditRetentionMs();
+if(retentionMs>0){store.cleanupSecurityEvents(retentionMs);setInterval(()=>store.cleanupSecurityEvents(retentionMs),86_400_000).unref();}
 const app=Fastify({logger:true,bodyLimit:256*1024});
 app.addHook('onSend',async(_request,reply,payload)=>{reply.header('X-Content-Type-Options','nosniff').header('X-Frame-Options','DENY').header('Referrer-Policy','no-referrer');if(process.env.NODE_ENV==='production')reply.header('Strict-Transport-Security','max-age=31536000; includeSubDomains');if(process.env.NODE_ENV==='production')reply.header('Content-Security-Policy',"default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'");return payload;});
 await app.register(formbody);await app.register(cookie);await mountWebApi(app,users,store);

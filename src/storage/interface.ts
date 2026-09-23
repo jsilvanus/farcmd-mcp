@@ -10,6 +10,7 @@ export interface AuthStore {
   updateOAuthGrant(userId:string,clientId:string,visibleLevels:number[],level5PermanentlyHidden:boolean):void;
   listOAuthGrants(userId:string):OAuthGrantLike[];
   touchOAuthGrant(userId:string,clientId:string):void;
+  recordSecurityEvent?(userId:string|undefined,clientId:string|undefined,event:string,details?:Record<string,unknown>,outcome?:'success'|'failure'):void;
 }
 export interface McpUser { id:string; name:string; email?:string; passwordHash?:string; createdAt:number; }
 export interface UserStore {

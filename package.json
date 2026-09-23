@@ -13,7 +13,7 @@
     "dev": "concurrently -k \"tsx watch src/server.ts\" \"vite --host 0.0.0.0\"",
     "start": "node dist/server.js",
     "build:web": "vite build",
-    "test": "node --import tsx --test test/security.test.ts test/verification.test.ts",
+    "test": "node --import tsx --test test/security.test.ts test/verification.test.ts test/audit.test.ts",
     "test:e2e": "node --import tsx --test test/integrity.e2e.test.ts"
   },
   "dependencies": {

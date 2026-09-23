@@ -601,3 +601,8 @@ command key           -> restrict,command="~/.ssh/farcmd/<mcp-host>-<command-id>
 ```
 
 `FARCMD-VERIFY 1 <nonce>` → canonical measurement + `HMAC-SHA256(secret, measurement)` → farcmd checks MAC, nonce and every hash against its own records → only then is the pre-authenticated execution channel used. Deleting the master key never disables verification or existing capabilities. Details: `docs/capability-integrity.md`.
+
+
+## Audit trail (implemented, part of Phase 8)
+
+Web API changes (one Fastify hook with a route→event map, enforced by a test), OAuth consent/token events and MCP confirmations, denials, integrity checks and executions go to an HMAC hash-chained `security_events` log with secret sanitization, configurable retention (`FARCMD_AUDIT_RETENTION_DAYS`), a per-user `GET /api/audit` view, `GET /api/audit/verify`, and an Audit page in the web UI. See README "Audit log".
