@@ -3,7 +3,7 @@ import type { CommandLevel } from './command-registry.js';
 
 export type ConfirmationRequirement='none'|'human'|'password';
 export function confirmationForLevel(level:CommandLevel):ConfirmationRequirement{return level<=3?'none':level===4?'human':'password';}
-export interface PendingExecution {token:string;userId:string;clientId:string;commandId:string;level:CommandLevel;createdAt:number;expiresAt:number;status?:'pending'|'completed';result?:ExecutionResult;}
+export interface PendingExecution {token:string;userId:string;clientId:string;commandId:string;level:CommandLevel;createdAt:number;expiresAt:number;status?:'pending'|'running'|'completed'|'consumed'|'expired';result?:ExecutionResult;}
 export interface ExecutionResult {exitCode:number|null;stdout:string;stderr:string;durationMs:number;signal?:string;}
 export class SqliteExecutionStore {
   constructor(private readonly db:DatabaseSync){}
@@ -17,7 +17,11 @@ export class SqliteExecutionStore {
   }
   consume(token:string):PendingExecution|undefined{const p=this.get(token);if(!p||p.status!=='pending')return undefined;const result=this.db.prepare("UPDATE pending_executions SET status='consumed' WHERE token=? AND status='pending'").run(token);return Number(result.changes)===1?p:undefined;}
   consumeCompleted(token:string):ExecutionResult|undefined{const p=this.get(token);if(!p||p.status!=='completed'||!p.result)return undefined;const result=this.db.prepare("UPDATE pending_executions SET status='consumed' WHERE token=? AND status='completed'").run(token);return Number(result.changes)===1?p.result:undefined;}
-  complete(token:string,result:ExecutionResult):void{this.db.prepare("UPDATE pending_executions SET status='completed',exit_code=?,stdout=?,stderr=?,duration_ms=?,signal=? WHERE token=? AND status='pending'").run(result.exitCode,result.stdout,result.stderr,result.durationMs,result.signal??null,token);}
+  /** Approval takes the request atomically, so it runs at most once however often it is approved. */
+  claim(token:string):boolean{return Number(this.db.prepare("UPDATE pending_executions SET status='running' WHERE token=? AND status='pending' AND expires_at>=?").run(token,Date.now()).changes)===1;}
+  /** The approved run failed before producing a result: the request can be approved again until it expires. */
+  release(token:string):void{this.db.prepare("UPDATE pending_executions SET status='pending' WHERE token=? AND status='running'").run(token);}
+  complete(token:string,result:ExecutionResult):void{this.db.prepare("UPDATE pending_executions SET status='completed',exit_code=?,stdout=?,stderr=?,duration_ms=?,signal=? WHERE token=? AND status IN ('pending','running')").run(result.exitCode,result.stdout,result.stderr,result.durationMs,result.signal??null,token);}
   expire(token:string):void{this.db.prepare("UPDATE pending_executions SET status='expired' WHERE token=? AND status='pending'").run(token);}
   cleanup(now=Date.now()):void{this.db.prepare("DELETE FROM pending_executions WHERE expires_at < ? OR status IN ('consumed','expired') AND expires_at < ?").run(now-24*60*60_000,now-24*60*60_000);}
 }

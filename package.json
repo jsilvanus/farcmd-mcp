@@ -13,7 +13,7 @@
     "dev": "concurrently -k \"tsx watch src/server.ts\" \"vite --host 0.0.0.0\"",
     "start": "node dist/server.js",
     "build:web": "vite build",
-    "test": "node --import tsx --test test/security.test.ts test/verification.test.ts test/audit.test.ts test/users.test.ts test/config.test.ts test/tokens.test.ts test/mcp-access.test.ts test/csrf.test.ts test/limits.test.ts",
+    "test": "node --import tsx --test test/security.test.ts test/verification.test.ts test/audit.test.ts test/users.test.ts test/config.test.ts test/tokens.test.ts test/mcp-access.test.ts test/csrf.test.ts test/limits.test.ts test/elicitation.test.ts",
     "test:e2e": "node --import tsx --test test/integrity.e2e.test.ts",
     "test:ui": "node --import tsx --test test/ui.smoke.test.ts",
     "admin": "node --disable-warning=ExperimentalWarning --import tsx src/cli/admin.ts"

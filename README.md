@@ -184,6 +184,25 @@ Immediately before a level 3, 4 or 5 command runs (after human approval or passw
 
 See [`docs/capability-integrity.md`](docs/capability-integrity.md) for the threat model, protocol, trust boundary, TOCTOU analysis and lifecycle. `sudo -E npm run test:e2e` runs the end-to-end tests against a real OpenSSH server.
 
+### Approving level 4 and 5 commands
+
+A level 4 or 5 tool call never runs the command itself. It creates an approval request (valid for 5 minutes) with a link to the web UI, where the signed-in owner approves it (level 5 also needs the command's execution password). An approval runs the command once. Approving again, or approving an expired or declined request, is refused.
+
+- **Clients that support URL elicitation** (they declare `elicitation.url` in `initialize`): the call sends the link to the client as an `elicitation/create` request in URL mode, so the client shows it to the person directly. The call then stays open until the command has run and returns its result, followed by `notifications/elicitation/complete`. If the client passed a progress token, a progress notification every 15 seconds keeps the connection alive. If the person declines or dismisses the link, the request is expired and the call returns an error. This works on the stateless endpoint: farcmd sends the elicitation on the call's own response stream and routes the client's answer (a separate `POST /mcp` from the same user and OAuth client) back to it. There is no standalone SSE stream (`GET /mcp` stays 405).
+- **Fallback, for every other client**, or when the elicitation fails or the call ends early: the call returns `pending: true` with `approvalUrl` and `confirmationToken`. After approval, calling the same tool with the token returns the result, once.
+
+Behind a proxy, allow MCP requests to stay open for about 6 minutes (the nginx example uses `proxy_read_timeout 360s`).
+
+### Running commands from the web UI
+
+Every command has a **Run** button on the Commands page (it needs an installed SSH capability).
+
+- **Levels 1–3** run at once, and the result (exit code, duration, stdout and stderr) is shown in a dialog.
+- **Level 4** asks for confirmation first, and **level 5** for the command's execution password.
+- **Show output after approval** is a per-command setting for levels 4–5. When it is off (the default), the approval page and Run show only the exit code and duration. The MCP client always gets the full result, and History always records it.
+
+Web runs go through the same integrity verification, SSH limits, history and audit as MCP runs, recorded with client `web` (`command.web_run` plus `command.execute` with actor `web`). The MCP access switch does not apply to them, because they are not MCP calls. Output is returned when the command finishes; it is not streamed.
+
 
 ## OAuth tokens
 
@@ -201,7 +220,7 @@ Security-relevant actions are recorded in an append-only audit log (`security_ev
 
 What is recorded:
 
-- **Web control plane**: every state-changing API call, recorded automatically by one Fastify hook with the event name, acting user, target, outcome, HTTP status, error and a list of changed field names (plus non-secret values such as level, enabled, hostname or visible levels). Covers sign-in, failed sign-in (attributed to the targeted account), registration, logout, account changes, SSH key upload/generate/unlock/lock/delete, target changes (including host fingerprint pinning), commands, capability install/remove/cleanup, level-5 password changes, verifier install/repair/manual script/verify/removal, OAuth grant changes/revocation, and reading remote shell history. A test fails if a new mutating route is not mapped to an audit event.
+- **Web control plane**: every state-changing API call, recorded automatically by one Fastify hook with the event name, acting user, target, outcome, HTTP status, error and a list of changed field names (plus non-secret values such as level, enabled, hostname or visible levels). Covers sign-in, failed sign-in (attributed to the targeted account), registration, logout, account changes, SSH key upload/generate/unlock/lock/delete, target changes (including host fingerprint pinning), commands, capability install/remove/cleanup, level-5 password changes (including an automatic clear when a level 5 command is moved off level 5 or its script or target changes, recorded as `command.level5_password_cleared` with the reason), verifier install/repair/manual script/verify/removal, OAuth grant changes/revocation, and reading remote shell history. A test fails if a new mutating route is not mapped to an audit event.
 - **OAuth**: consent approved or denied (with the granted levels), failed OAuth sign-in, token issue and refresh, rejected grants.
 - **MCP**: confirmation requested, attempted and executed; level-5 password failures; refused calls (revoked grant, hidden level, wrong tool); integrity verification passed or blocked; every command execution with exit status.
 

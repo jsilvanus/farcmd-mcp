@@ -53,6 +53,34 @@ test('web UI: sign in, visit every page, toggle MCP access, sign out',{skip:!exi
     await page.getByRole('button',{name:'Turn on MCP access'}).click();
     await page.getByRole('button',{name:'Turn off MCP access'}).waitFor();
     assert.equal(new McpAccessPolicy(db).status(user.id).effective,true);
+    // SSH and Commands: lists with row actions; adding and editing happen in dialogs.
+    await page.getByRole('link',{name:'SSH',exact:true}).click();
+    await page.getByRole('button',{name:'Generate key'}).click();
+    const dialog=page.locator('dialog.modal');
+    await dialog.getByLabel('Name',{exact:true}).fill('ops-master'); await dialog.getByRole('button',{name:'Generate'}).click();
+    await page.locator('.row',{hasText:'ops-master'}).waitFor(); await dialog.waitFor({state:'detached'}); // closes after saving
+    await page.getByRole('button',{name:'Add target'}).click();
+    await dialog.getByLabel('Name',{exact:true}).fill('web-01'); await dialog.getByLabel('Hostname',{exact:true}).fill('web-01.internal'); await dialog.getByLabel('Username',{exact:true}).fill('deploy');
+    await dialog.getByRole('button',{name:'Add target'}).click();
+    await page.locator('.row',{hasText:'deploy@web-01.internal:22'}).waitFor();
+    await page.locator('.row',{hasText:'web-01'}).getByRole('button',{name:'Edit'}).click();
+    await dialog.getByLabel('Port',{exact:true}).fill('2222'); await dialog.getByRole('button',{name:'Save'}).click();
+    await page.locator('.row',{hasText:'deploy@web-01.internal:2222'}).waitFor();
+    await page.getByRole('link',{name:'Commands',exact:true}).click();
+    await page.getByRole('button',{name:'New command'}).click();
+    await dialog.getByLabel('Name',{exact:true}).fill('Disk usage'); await dialog.getByLabel('Content',{exact:true}).fill('df -h');
+    await dialog.getByRole('button',{name:'Create command'}).click();
+    await page.locator('.row',{hasText:'Disk usage'}).waitFor();
+    await page.getByRole('button',{name:'New command'}).click(); await dialog.getByRole('button',{name:'Create command'}).click();
+    assert.equal(await dialog.count(),1,'an invalid form keeps the dialog open'); await dialog.getByRole('button',{name:'Cancel'}).click();
+    await page.locator('.row',{hasText:'Disk usage'}).getByRole('button',{name:'Edit'}).click();
+    await dialog.locator('select[name=level]').selectOption('2'); await dialog.getByRole('button',{name:'Save'}).click();
+    await page.locator('.row',{hasText:'Disk usage'}).getByText('Level 2 · Low-impact').waitFor();
+    assert.equal(await page.locator('.row',{hasText:'Disk usage'}).getByRole('button',{name:'Run'}).isDisabled(),true,'Run needs an installed capability');
+    await page.locator('.row',{hasText:'Disk usage'}).getByRole('button',{name:'Edit'}).click();
+    await dialog.getByLabel('Show output after approval (levels 4–5)').check(); await dialog.getByRole('button',{name:'Save'}).click();
+    await dialog.waitFor({state:'detached'});
+    if(process.env.FARCMD_UI_SCREENSHOTS)await page.screenshot({path:join(process.env.FARCMD_UI_SCREENSHOTS,'commands.png'),fullPage:true});
     for(const [link,heading] of [['SSH',/SSH/],['Commands',/Commands/],['OAuth Sources',/OAuth Sources/],['History',/History/],['Audit',/Audit log/],['Settings',/Settings|Account/],['Dashboard',/Dashboard/]] as const){
       await page.getByRole('link',{name:link,exact:true}).click();
       await page.getByRole('heading',{name:heading}).first().waitFor();

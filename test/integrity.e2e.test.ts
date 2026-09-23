@@ -291,10 +291,32 @@ sys.stdout.write(body + "mac " + hmac.new(os.urandom(32), body.encode(), hashlib
     });
 
     await t.test('L4 (human approval) and L5 (password) verify after confirmation',{timeout:60_000},async()=>{
+      // Output reaches the approver only when the command allows it; the MCP client always gets it.
       const p4=await run(cmdL4,4) as any; assert.equal(p4.pending,true);
-      const a4=await api('POST','/api/confirm/'+encodeURIComponent(p4.confirmationToken),{}); assert.equal(a4.status,200,JSON.stringify(a4.body)); assert.equal(a4.body.stdout,'level-four\n');
+      const waiting=connector.awaitConfirmation(ctx,cmdL4,4,p4.confirmationToken,new AbortController().signal);
+      const a4=await api('POST','/api/confirm/'+encodeURIComponent(p4.confirmationToken),{}); assert.equal(a4.status,200,JSON.stringify(a4.body));
+      assert.equal(a4.body.exitCode,0); assert.equal(a4.body.stdout,undefined); assert.equal(a4.body.outputHidden,true);
+      assert.equal((await waiting)?.stdout,'level-four\n','a waiting MCP call (URL elicitation) gets the full result');
+      const again=await api('POST','/api/confirm/'+encodeURIComponent(p4.confirmationToken),{}); assert.equal(again.status,400,'an approved request cannot run again'); assert.match(again.body.error,/already approved/);
+      for(const id of [cmdL4,cmdL5])assert.equal((await api('PATCH','/api/commands/'+id,{showOutputOnApproval:true})).status,200);
+      const p4b=await run(cmdL4,4) as any;
+      assert.equal((await api('POST','/api/confirm/'+encodeURIComponent(p4b.confirmationToken),{})).body.stdout,'level-four\n');
       const p5=await run(cmdL5,5) as any; assert.equal(p5.pending,true);
       const a5=await api('POST','/api/confirm/'+encodeURIComponent(p5.confirmationToken),{password:'level five password'}); assert.equal(a5.status,200,JSON.stringify(a5.body)); assert.equal(a5.body.stdout,'level-five\n');
+    });
+
+    await t.test('web Run: levels 1-3 directly, level 4 confirmed, level 5 with the password',{timeout:60_000},async()=>{
+      const a=await api('POST','/api/commands/'+cmdA+'/run',{}); assert.equal(a.status,200,JSON.stringify(a.body)); assert.equal(a.body.stdout,'A:'+account+'\n'); assert.equal(a.body.exitCode,0);
+      assert.equal((await api('POST','/api/commands/'+cmdL4+'/run',{})).status,400,'level 4 needs confirmation');
+      assert.equal((await api('POST','/api/commands/'+cmdL4+'/run',{confirmed:true})).body.stdout,'level-four\n');
+      const wrong=await api('POST','/api/commands/'+cmdL5+'/run',{password:'wrong password!!'}); assert.equal(wrong.status,400); assert.match(wrong.body.error,/Invalid execution password/);
+      assert.equal((await api('PATCH','/api/commands/'+cmdL5,{showOutputOnApproval:false})).status,200);
+      const l5=await api('POST','/api/commands/'+cmdL5+'/run',{password:'level five password'}); assert.equal(l5.status,200); assert.equal(l5.body.exitCode,0); assert.equal(l5.body.outputHidden,true);
+      const history=(db.prepare("SELECT client_id,stdout FROM execution_history WHERE client_id='web' ORDER BY started_at").all() as any[]);
+      assert.deepEqual(history.map(h=>h.stdout),['A:'+account+'\n','level-four\n','level-five\n'],'web runs are in the history, with their output');
+      const audit=(db.prepare("SELECT event,actor,outcome FROM security_events WHERE event IN ('command.web_run','command.execute') AND actor='web' ORDER BY seq").all() as any[]).map(r=>r.event+':'+r.outcome);
+      assert.deepEqual(audit.filter(e=>e.startsWith('command.web_run')),['command.web_run:success','command.web_run:failure','command.web_run:success','command.web_run:failure','command.web_run:success']);
+      assert.ok(audit.includes('command.execute:success'),'the execution itself is audited with actor web');
     });
 
     await t.test('master deletion: verification and execution continue, provisioning is unavailable',{timeout:60_000},async()=>{
@@ -304,7 +326,8 @@ sys.stdout.write(body + "mac " + hmac.new(os.urandom(32), body.encode(), hashlib
       const p4=await run(cmdL4,4) as any;
       assert.equal((await api('POST','/api/confirm/'+encodeURIComponent(p4.confirmationToken),{})).body.stdout,'level-four\n');
       const p5=await run(cmdL5,5) as any;
-      assert.equal((await api('POST','/api/confirm/'+encodeURIComponent(p5.confirmationToken),{password:'level five password'})).body.stdout,'level-five\n');
+      assert.equal((await api('POST','/api/confirm/'+encodeURIComponent(p5.confirmationToken),{password:'level five password'})).body.exitCode,0);
+      assert.equal(((await connector.executeCommand(ctx,cmdL5,5,p5.confirmationToken)) as any).stdout,'level-five\n','the MCP client gets the output');
       assert.equal((await api('POST','/api/ssh/targets/'+targetId+'/verifier/verify',{})).body.verification.ok,true);
       // Provisioning authority is gone.
       const created=await api('POST','/api/commands',{name:'new',description:'new',type:'shell',content:'echo new',targetId,level:3});
