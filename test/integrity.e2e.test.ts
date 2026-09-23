@@ -39,6 +39,10 @@ test('capability integrity verification end to end',{skip:skipReason,timeout:300
   const { default: formbody }=await import('@fastify/formbody');
   const { SqliteAuthStore, SqliteUserStore }=await import('../src/storage/sqlite.js');
   const { mountWebApi }=await import('../src/web-api.js');
+  const { asWebClient }=await import('./web-client.js');
+  // This suite tests integrity verification and runs many commands quickly; rate limiting is covered in limits.test.ts.
+  const { ExecutionLimits, executionLimitOptionsFromEnv, setExecutionLimits }=await import('../src/limits.js');
+  setExecutionLimits(new ExecutionLimits({...executionLimitOptionsFromEnv(),perClientPerMinute:0}));
   const { FarcmdConnectorImpl }=await import('../src/connector.js');
   const { SqliteOAuthGrantStore }=await import('../src/oauth/grants.js');
   const { SqliteVerificationAuthorityStore, verificationKeyAad, verificationSecretAad }=await import('../src/storage/verification-authorities.js');
@@ -71,7 +75,7 @@ test('capability integrity verification end to end',{skip:skipReason,timeout:300
     const store=new SqliteAuthStore(join(dir,'app.sqlite')); const db=store.getDatabase();
     const { SqliteSettingsStore }=await import('../src/storage/settings.js'); new SqliteSettingsStore(db).setRegistrationEnabled(true);
     const users=new SqliteUserStore(db);
-    const app=Fastify(); await app.register(formbody); await app.register(cookie); await mountWebApi(app,users,store);
+    const app=Fastify(); await app.register(formbody); await app.register(cookie); asWebClient(app); await mountWebApi(app,users,store);
     const reg=await app.inject({method:'POST',url:'/api/auth/register',payload:{name:'E2E',email:account+'@example.test',password:'correct horse battery staple'}});
     assert.equal(reg.statusCode,201,reg.body);
     const cookieHeader='farcmd_session='+reg.cookies.find(c=>c.name==='farcmd_session')!.value;

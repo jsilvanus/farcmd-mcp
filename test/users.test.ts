@@ -14,6 +14,7 @@ import { isActiveUser } from '../src/storage/interface.js';
 import { UserAdmin } from '../src/user-admin.js';
 import { AuditLog } from '../src/audit.js';
 import { mountWebApi } from '../src/web-api.js';
+import { asWebClient } from './web-client.js';
 import { mountAuthorizationServer } from '../src/oauth/authorization-server.js';
 import { mountMcpHttp } from '../src/mcp/http.js';
 import { issueAccessToken } from '../src/oauth/jwt.js';
@@ -27,7 +28,7 @@ const ISSUER='http://localhost:5999'; const RESOURCE=ISSUER+'/mcp'; const JWT=ra
 async function fixture(){
   const dir=mkdtempSync(join(tmpdir(),'farcmd-users-'));
   const store=new SqliteAuthStore(join(dir,'app.sqlite')); const db=store.getDatabase(); const users=new SqliteUserStore(db);
-  const app=Fastify(); await app.register(formbody); await app.register(cookie); await mountWebApi(app,users,store);
+  const app=Fastify(); await app.register(formbody); await app.register(cookie); asWebClient(app); await mountWebApi(app,users,store);
   await mountAuthorizationServer(app,ISSUER,RESOURCE,JWT,store,users);
   await mountMcpHttp(app,{connector:new FarcmdConnectorImpl(db,ISSUER),publicUrl:ISSUER,jwtSecret:JWT,resource:RESOURCE,isUserActive:id=>isActiveUser(users.getUser(id))});
   return {dir,store,db,users,app,admin:new UserAdmin(db),done:()=>rmSync(dir,{recursive:true,force:true})};

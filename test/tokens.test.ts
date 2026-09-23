@@ -113,3 +113,40 @@ test('migration hashes existing plaintext refresh tokens without breaking connec
     assert.equal((db.prepare('SELECT COUNT(*) AS n FROM refresh_tokens WHERE family_id IS NULL').get() as any).n,0,'migration is idempotent');
   }finally{rmSync(dir,{recursive:true,force:true});}
 });
+
+test('authorization flow: sign-in session is kept in SQLite, survives a restart and is single use',async()=>{
+  const dir=mkdtempSync(join(tmpdir(),'farcmd-authorize-'));
+  // Client metadata document of a client on a public IP literal (no DNS needed); only its fetch is mocked.
+  const client='https://93.184.215.14/client.json'; const redirect='https://93.184.215.14/cb';
+  const realFetch=globalThis.fetch;
+  globalThis.fetch=(async(input:any,init?:any)=>String(input)===client?new Response(JSON.stringify({client_id:client,client_name:'Test client',redirect_uris:[redirect]}),{headers:{'content-type':'application/json'}}):realFetch(input,init)) as typeof fetch;
+  try{
+    const f=await fixture(dir);
+    const password='correct horse battery staple';
+    const { UserAdmin }=await import('../src/user-admin.js');
+    await new UserAdmin(f.db).create({email:'o@example.test',name:'O',password});
+    const verifier=randomBytes(32).toString('base64url');
+    const oauth=Buffer.from(new URLSearchParams({response_type:'code',client_id:client,redirect_uri:redirect,code_challenge:createHash('sha256').update(verifier).digest('base64url'),code_challenge_method:'S256',state:'s1'}).toString()).toString('base64url');
+    const app1=Fastify(); await app1.register(formbody); await mountAuthorizationServer(app1,ISSUER,ISSUER+'/mcp',randomBytes(32),f.store,new SqliteUserStore(f.db));
+    const signIn=await app1.inject({method:'POST',url:'/oauth/authorize',payload:{oauth,email:'o@example.test',password}});
+    assert.equal(signIn.statusCode,200,signIn.body);
+    const session=/name="session" value="([^"]+)"/.exec(signIn.body)![1]!;
+    assert.equal((f.db.prepare('SELECT COUNT(*) AS n FROM oauth_login_sessions').get() as any).n,1);
+    assert.ok(!JSON.stringify(f.db.prepare('SELECT * FROM oauth_login_sessions').all()).includes(session),'only the hash is stored');
+    // The server restarts between sign-in and consent: a fresh process (app2) still knows the session.
+    const restarted=new SqliteAuthStore(join(dir,'app.sqlite'));
+    const app2=Fastify(); await app2.register(formbody); await mountAuthorizationServer(app2,ISSUER,ISSUER+'/mcp',randomBytes(32),restarted,new SqliteUserStore(restarted.getDatabase()));
+    const approve=await app2.inject({method:'POST',url:'/oauth/authorize',payload:{session,action:'approve',level:'1'}});
+    assert.equal(approve.statusCode,302,approve.body);
+    const location=new URL(String(approve.headers.location)); assert.equal(location.searchParams.get('state'),'s1'); assert.ok(location.searchParams.get('code'));
+    const again=await app2.inject({method:'POST',url:'/oauth/authorize',payload:{session,action:'approve',level:'1'}});
+    assert.equal(again.statusCode,400,'the sign-in session is single use');
+    const token=await app2.inject({method:'POST',url:'/oauth/token',payload:{grant_type:'authorization_code',code:location.searchParams.get('code')!,code_verifier:verifier,client_id:client,redirect_uri:redirect}});
+    assert.equal(token.statusCode,200,token.body);
+    // Expired sessions are refused and purged.
+    f.tokens.saveLoginSession('old',{userId:f.userId,oauth,expires:Date.now()-1});
+    assert.equal(f.tokens.getLoginSession('old'),undefined); f.tokens.cleanup();
+    assert.equal((f.db.prepare('SELECT COUNT(*) AS n FROM oauth_login_sessions').get() as any).n,0);
+    f.done();
+  }finally{globalThis.fetch=realFetch;rmSync(dir,{recursive:true,force:true});}
+});

@@ -119,7 +119,12 @@ MCP can be turned off without stopping the farcmd process. Three switches apply,
 
 While MCP is off, execution tools are no longer listed. `farcmd_health` and `list_commands` stay listed but return an error that says why. Execution is refused even with a still-valid access token or a confirmation token obtained earlier, and a pending level 4/5 confirmation cannot be approved. The web UI, OAuth grants and tokens are left untouched, so turning MCP back on works immediately without reconnecting clients. Every change and refused call is audited. farcmd has no admin role in the web UI: operator actions are CLI-only.
 
-Mutating browser API requests validate the `Origin` header when present. Login and registration have a basic per-IP rate limit. This is intentionally a baseline; Phase 8 will add full CSRF strategy, stronger abuse controls, security event logging, and operational hardening.
+### Web and execution hardening
+
+- **CSRF.** Every state-changing `/api/` call must carry the `X-Farcmd-Request: 1` header, which the web UI always sends. A cross-site page cannot set it without a CORS preflight, and farcmd never grants one. Requests whose `Sec-Fetch-Site` is `cross-site` or `same-site` are refused, and so is an `Origin` other than `MCP_PUBLIC_URL`. The session cookie is `HttpOnly` and `SameSite=Lax`, and `Secure` in production.
+- **Rate limits.** Login, registration and web confirmations have per-IP rate limits. MCP executions are limited per user and OAuth client: `FARCMD_MCP_EXECUTIONS_PER_MINUTE` defaults to 30, and `0` turns the limit off. New executions and level 4/5 confirmation requests count; fetching a confirmed result does not.
+- **SSH concurrency.** At most `FARCMD_SSH_MAX_CONCURRENT` executions run at once (default 8), and at most `FARCMD_SSH_MAX_PER_TARGET` per target (default 2). A call over the limit is refused immediately with a "try again shortly" error, not queued, and the refusal is audited.
+- **OAuth sign-in step.** The short-lived session between sign-in and consent on `/oauth/authorize` is stored in SQLite as a hash. It survives a restart, is single use and is purged when it expires.
 
 The Phase 1 development bootstrap account remains optional: set `MCP_DEFAULT_USER_PASSWORD` to create it. Omitting that variable is now valid when using normal account registration.
 

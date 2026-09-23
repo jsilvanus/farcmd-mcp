@@ -12,6 +12,7 @@ import { SqliteExecutionStore, confirmationForLevel, type ConfirmationRequiremen
 import { randomToken } from './oauth/pkce.js';
 import { SqliteExecutionHistoryStore } from './execution-history.js';
 import { McpAccessPolicy } from './mcp-access.js';
+import { executionLimits } from './limits.js';
 
 export interface ConnectorContext { userId:string; clientId:string; accessToken:string; }
 export interface CommandSummary { id:string; name:string; description:string; level:CommandLevel; enabled:boolean; confirmation:ConfirmationRequirement; }
@@ -63,6 +64,7 @@ export class FarcmdConnectorImpl implements FarcmdConnector {
     if(command.level!==expectedLevel)throw new Error('Command level does not match the selected execution tool.');
     if(!grant.visibleLevels.includes(command.level))throw new Error('This OAuth authorization does not expose this command.');
     this.grants.touch(context.userId,context.clientId);
+    if(!confirmationToken)executionLimits().takeClientCall(context.userId,context.clientId);
     const confirmation=confirmationForLevel(command.level);
     if(confirmation!=='none'){
       if(confirmationToken){ const pending=this.pending.get(confirmationToken); if(!pending||pending.userId!==context.userId||pending.clientId!==context.clientId||pending.commandId!==commandId||pending.level!==command.level)throw new Error('Confirmation request not found or expired.'); if(pending.status==='completed'){const completed=this.pending.consumeCompleted(confirmationToken);if(!completed)throw new Error('Confirmation result is no longer available.');return {ok:true,commandId,level:command.level,...completed};} return {ok:true,pending:true,commandId,level:command.level,confirmation,approvalUrl:this.publicUrl+'/?page=confirm&token='+encodeURIComponent(confirmationToken),confirmationToken,expiresAt:pending.expiresAt}; }
@@ -93,6 +95,11 @@ export class FarcmdConnectorImpl implements FarcmdConnector {
     new AuditLog(this.db).record({event,actor,outcome,userId,clientId,...(typeof details.commandId==='string'?{targetType:'command',targetId:details.commandId}:{}),details});
   }
   private async executeStoredCommand(userId:string,clientId:string,commandId:string,level:CommandLevel):Promise<CommandExecution>{
+    const targetId=this.commands.get(userId,commandId)?.targetId??'';
+    const release=executionLimits().acquireSsh(targetId);
+    try{return await this.executeStoredCommandNow(userId,clientId,commandId,level);}finally{release();}
+  }
+  private async executeStoredCommandNow(userId:string,clientId:string,commandId:string,level:CommandLevel):Promise<CommandExecution>{
     const command=this.commands.get(userId,commandId); if(!command||!command.enabled||command.level!==level)throw new Error('Command is no longer available.');
     const target=this.ssh.getTarget(userId,command.targetId); if(!target||!target.enabled)throw new Error('SSH target is unavailable.');
     if(!target.hostFingerprint)throw new Error('SSH target has no pinned host fingerprint.');

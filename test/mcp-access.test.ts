@@ -13,6 +13,7 @@ import { isActiveUser } from '../src/storage/interface.js';
 import { UserAdmin } from '../src/user-admin.js';
 import { AuditLog } from '../src/audit.js';
 import { mountWebApi } from '../src/web-api.js';
+import { asWebClient } from './web-client.js';
 import { mountMcpHttp } from '../src/mcp/http.js';
 import { issueAccessToken } from '../src/oauth/jwt.js';
 import { FarcmdConnectorImpl } from '../src/connector.js';
@@ -28,7 +29,7 @@ async function fixture(){
   const dir=mkdtempSync(join(tmpdir(),'farcmd-mcp-access-'));
   const store=new SqliteAuthStore(join(dir,'app.sqlite')); const db=store.getDatabase(); const users=new SqliteUserStore(db);
   const connector=new FarcmdConnectorImpl(db,ISSUER);
-  const app=Fastify(); await app.register(formbody); await app.register(cookie); await mountWebApi(app,users,store);
+  const app=Fastify(); await app.register(formbody); await app.register(cookie); asWebClient(app); await mountWebApi(app,users,store);
   await mountMcpHttp(app,{connector,publicUrl:ISSUER,jwtSecret:JWT,resource:RESOURCE,isUserActive:id=>isActiveUser(users.getUser(id))});
   const admin=new UserAdmin(db);
   const user=await admin.create({email:'m@example.test',name:'Em',password:PASSWORD});

@@ -9,32 +9,34 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json && vite build",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p web/tsconfig.json",
     "dev": "concurrently -k \"tsx watch src/server.ts\" \"vite --host 0.0.0.0\"",
     "start": "node dist/server.js",
     "build:web": "vite build",
-    "test": "node --import tsx --test test/security.test.ts test/verification.test.ts test/audit.test.ts test/users.test.ts test/config.test.ts test/tokens.test.ts test/mcp-access.test.ts",
+    "test": "node --import tsx --test test/security.test.ts test/verification.test.ts test/audit.test.ts test/users.test.ts test/config.test.ts test/tokens.test.ts test/mcp-access.test.ts test/csrf.test.ts test/limits.test.ts",
     "test:e2e": "node --import tsx --test test/integrity.e2e.test.ts",
+    "test:ui": "node --import tsx --test test/ui.smoke.test.ts",
     "admin": "node --disable-warning=ExperimentalWarning --import tsx src/cli/admin.ts"
   },
   "dependencies": {
+    "@fastify/cookie": "^11.0.2",
     "@fastify/formbody": "^8.0.2",
+    "@fastify/static": "^10.1.4",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "@node-rs/argon2": "^2.0.2",
     "fastify": "^5.2.1",
     "jose": "^6.2.12",
-    "zod": "^4.6.5",
-    "@fastify/cookie": "^11.0.2",
-    "@fastify/static": "^10.1.4",
-    "ssh2": "^1.17.0"
+    "ssh2": "^1.17.0",
+    "zod": "^4.6.5"
   },
   "devDependencies": {
     "@types/node": "^22.10.5",
+    "@types/ssh2": "^1.15.6",
+    "concurrently": "^9.1.2",
+    "playwright": "1.56.1",
     "tsx": "^4.19.2",
     "typescript": "^5.7.3",
-    "vite": "^7.1.5",
-    "concurrently": "^9.1.2",
-    "@types/ssh2": "^1.15.6"
+    "vite": "^7.1.5"
   },
   "bin": {
     "farcmd-admin": "dist/cli/admin.js"

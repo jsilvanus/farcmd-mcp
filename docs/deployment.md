@@ -29,6 +29,8 @@ openssl rand -base64 32   # JWT_SECRET — signs OAuth access tokens
 | `FARCMD_TRUST_PROXY` | behind a proxy | Which proxies may set `X-Forwarded-For`/`-Proto` (see §4). Without it every request appears to come from the proxy, which breaks per-IP login limits and audit IPs. |
 | `FARCMD_AUDIT_RETENTION_DAYS` | – | Audit log retention (default 365, `0` = forever). |
 | `FARCMD_MAX_OUTPUT_BYTES` | – | Captured stdout/stderr per execution (default 262144). |
+| `FARCMD_SSH_MAX_CONCURRENT`, `FARCMD_SSH_MAX_PER_TARGET` | – | Concurrent SSH executions in total (default 8) and per target (default 2); over the limit, calls are refused. |
+| `FARCMD_MCP_EXECUTIONS_PER_MINUTE` | – | New MCP executions per user and OAuth client per minute (default 30, `0` = no limit). |
 
 In production the server refuses to start with a missing or non-`https` `MCP_PUBLIC_URL`, with a
 URL that has a path, or with the development bootstrap `MCP_DEFAULT_USER_PASSWORD` set.

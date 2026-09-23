@@ -33,6 +33,9 @@ export type RefreshRotation =
 export function migrateOAuthTokenTables(db:DatabaseSync):void{
   for(const column of ['family_id TEXT','created_at INTEGER','used_at INTEGER'])try{db.exec('ALTER TABLE refresh_tokens ADD COLUMN '+column);}catch{}
   for(const column of ['hashed INTEGER NOT NULL DEFAULT 0','consumed_at INTEGER','family_id TEXT'])try{db.exec('ALTER TABLE authorization_codes ADD COLUMN '+column);}catch{}
+  // Sign-in-to-consent step of /oauth/authorize (5 minutes). In the database rather than process memory,
+  // so it survives restarts and is bounded by cleanup; only the token hash is stored.
+  db.exec('CREATE TABLE IF NOT EXISTS oauth_login_sessions (token TEXT PRIMARY KEY, user_id TEXT NOT NULL, oauth TEXT NOT NULL, expires INTEGER NOT NULL)');
   db.exec('CREATE INDEX IF NOT EXISTS refresh_tokens_family ON refresh_tokens(family_id)');
   db.exec('CREATE INDEX IF NOT EXISTS refresh_tokens_subject ON refresh_tokens(subject,client_id)');
   // Legacy rows stored the token itself: replace it by its hash, each in its own family, keeping its expiry.
@@ -89,10 +92,21 @@ export class SqliteOAuthTokenStore {
     if(!claimed)return {status:'reused',previous,revokedTokens:this.revokeFamily(previous.familyId)};
     return {status:'ok',previous,token:this.issueRefreshToken({familyId:previous.familyId,clientId:previous.clientId,subject:previous.subject,scope:previous.scope,expires:previous.expires})};
   }
+  saveLoginSession(token:string,r:{userId:string;oauth:string;expires:number}):void{
+    this.db.prepare('DELETE FROM oauth_login_sessions WHERE expires<?').run(Date.now());
+    this.db.prepare('INSERT INTO oauth_login_sessions (token,user_id,oauth,expires) VALUES (?,?,?,?)').run(hashToken(token),r.userId,r.oauth,r.expires);
+  }
+  getLoginSession(token:string):{userId:string;oauth:string;expires:number}|undefined{
+    const r=this.db.prepare('SELECT * FROM oauth_login_sessions WHERE token=?').get(hashToken(token)) as any;
+    return r&&r.expires>=Date.now()?{userId:r.user_id,oauth:r.oauth,expires:r.expires}:undefined;
+  }
+  /** Single use: true only for the caller that removed it. */
+  consumeLoginSession(token:string):boolean{ return Number(this.db.prepare('DELETE FROM oauth_login_sessions WHERE token=? AND expires>=?').run(hashToken(token),Date.now()).changes)===1; }
   revokeFamily(familyId:string):number{ return Number(this.db.prepare('DELETE FROM refresh_tokens WHERE family_id=? AND used_at IS NULL').run(familyId).changes); }
   revokeForGrant(subject:string,clientId:string):number{ return Number(this.db.prepare('DELETE FROM refresh_tokens WHERE subject=? AND client_id=?').run(subject,clientId).changes); }
   cleanup(now=Date.now()):void{
     this.db.prepare('DELETE FROM refresh_tokens WHERE expires<?').run(now);
     this.db.prepare('DELETE FROM authorization_codes WHERE expires<?').run(now-CONSUMED_CODE_RETENTION_MS);
+    this.db.prepare('DELETE FROM oauth_login_sessions WHERE expires<?').run(now);
   }
 }

@@ -11,6 +11,7 @@ import formbody from '@fastify/formbody';
 import { SqliteAuthStore, SqliteUserStore } from '../src/storage/sqlite.js';
 import { AuditLog, sanitizeDetails } from '../src/audit.js';
 import { mountWebApi, AUDITED_ROUTES } from '../src/web-api.js';
+import { asWebClient } from './web-client.js';
 import { FarcmdConnectorImpl } from '../src/connector.js';
 import { SqliteOAuthGrantStore } from '../src/oauth/grants.js';
 import { SqliteSettingsStore } from '../src/storage/settings.js';
@@ -67,7 +68,7 @@ test('every mutating web API route is audited',async()=>{
   try{
     const app=Fastify(); const routes:string[]=[];
     app.addHook('onRoute',r=>{for(const m of [r.method].flat())routes.push(m+' '+r.url);});
-    await app.register(formbody); await app.register(cookie); await mountWebApi(app,new SqliteUserStore(f.db),f.store);
+    await app.register(formbody); await app.register(cookie); asWebClient(app); await mountWebApi(app,new SqliteUserStore(f.db),f.store);
     await app.ready();
     const mutating=routes.filter(r=>/^(POST|PATCH|PUT|DELETE) \/api\//.test(r));
     assert.ok(mutating.length>20);
@@ -78,7 +79,7 @@ test('every mutating web API route is audited',async()=>{
 test('web API actions are recorded per user without secrets and are readable via /api/audit',async()=>{
   const f=fixture();
   try{
-    const app=Fastify(); await app.register(formbody); await app.register(cookie); await mountWebApi(app,new SqliteUserStore(f.db),f.store);
+    const app=Fastify(); await app.register(formbody); await app.register(cookie); asWebClient(app); await mountWebApi(app,new SqliteUserStore(f.db),f.store);
     const password='correct horse battery staple';
     const reg=await app.inject({method:'POST',url:'/api/auth/register',payload:{name:'Owner',email:'owner@example.test',password}});
     assert.equal(reg.statusCode,201);
