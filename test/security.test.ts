@@ -29,7 +29,7 @@ test('database initializes all security-critical tables',()=>{
   const f=fixture();
   try{
     const names=(f.db.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all() as any[]).map(r=>r.name);
-    for(const name of ['users','web_sessions','ssh_keys','ssh_targets','commands','command_keys','oauth_grants','pending_executions','execution_history','security_events']) assert.ok(names.includes(name),name);
+    for(const name of ['users','web_sessions','ssh_keys','ssh_targets','commands','command_installations','remote_capability_ledger','oauth_grants','pending_executions','execution_history','security_events']) assert.ok(names.includes(name),name);
   } finally { cleanup(f); }
 });
 
@@ -54,7 +54,7 @@ test('confirmation policy maps levels 1-3, 4 and 5 correctly',()=>{
   assert.equal(confirmationForLevel(5),'password');
 });
  
-test('command keys are isolated per command and store only encrypted private material',()=>{
+test('command installations are isolated per command and store only encrypted private material',()=>{
   const f=fixture();
   try{
     const keys=new SqliteCommandKeyStore(f.db);
@@ -67,13 +67,15 @@ test('command keys are isolated per command and store only encrypted private mat
   } finally { cleanup(f); }
 });
 
-test('command restricted authorized key binds the exact command and disables forwarding',()=>{
+test('command restricted authorized key binds the exact forced capability',()=>{
   const publicKey='ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAItest';
   const line=buildCommandRestrictedAuthorizedKey(publicKey,'echo "hello"');
   assert.match(line,/^restrict,command="echo \\"hello\\"" ssh-ed25519 /);
   assert.throws(()=>buildCommandRestrictedAuthorizedKey(publicKey,'echo bad\\nnext'));
 });
 
+
+test('farcmd scripts distinguish shell commands and bash scripts',()=>{const {buildFarcmdScript,farcmdScriptPath,buildCommandRestrictedAuthorizedKey}=require('../src/ssh.js');});
 
 test('OAuth grants normalize levels and permanently hide level 5',()=>{
   const f=fixture();
@@ -95,9 +97,9 @@ test('command execution passwords are per-command and hashed',async()=>{
   try{
     const commands=new SqliteCommandStore(f.db);
     const targetId=randomUUID();
-    const base={userId:f.userId,targetId,name:'danger',description:'dangerous',shellCommand:'echo danger',level:5 as const,enabled:true,createdAt:Date.now(),updatedAt:Date.now()};
+    const base={userId:f.userId,targetId,name:'danger',description:'dangerous',type:'shell' as const,content:'echo danger',level:5 as const,enabled:true,createdAt:Date.now(),updatedAt:Date.now()};
     const a={id:randomUUID(),...base};
-    const b={id:randomUUID(),...base,name:'other',shellCommand:'echo other'};
+    const b={id:randomUUID(),...base,name:'other',content:'echo other'};
     commands.create(a); commands.create(b);
     const {hash}=await import('@node-rs/argon2');
     await commands.setExecutionPassword(f.userId,a.id,await hash('correct horse battery staple',{algorithm:2}));
@@ -114,7 +116,7 @@ test('changing level, target or shell command clears level 5 password',async()=>
   try{
     const commands=new SqliteCommandStore(f.db);
     const id=randomUUID(),targetId=randomUUID();
-    const row={id,userId:f.userId,targetId,name:'danger',description:'danger',shellCommand:'echo 1',level:5 as const,enabled:true,createdAt:Date.now(),updatedAt:Date.now()};
+    const row={id,userId:f.userId,targetId,name:'danger',description:'danger',type:'shell' as const,content:'echo 1',level:5 as const,enabled:true,createdAt:Date.now(),updatedAt:Date.now()};
     commands.create(row);
     const {hash}=await import('@node-rs/argon2');
     commands.setExecutionPassword(f.userId,id,await hash('abcdefghijkl',{algorithm:2}));
@@ -174,7 +176,7 @@ test('connector refuses hidden levels before any SSH execution',async()=>{
     f.db.prepare('INSERT INTO ssh_keys (id,user_id,name,encrypted_private_key,created_at,updated_at) VALUES (?,?,?,?,?,?)').run(randomUUID(),f.userId,'key','1.x.x',Date.now(),Date.now());
     const keyId=(f.db.prepare('SELECT id FROM ssh_keys WHERE user_id=?').get(f.userId) as any).id;
     f.db.prepare('INSERT INTO ssh_targets (id,user_id,name,hostname,port,username,ssh_key_id,host_fingerprint,enabled,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)').run(targetId,f.userId,'target','localhost',22,'user',keyId,'sha256:abc',1,Date.now(),Date.now());
-    commands.create({id:commandId,userId:f.userId,targetId,name:'High impact',description:'test',shellCommand:'echo never',level:4,enabled:true,createdAt:Date.now(),updatedAt:Date.now()});
+    commands.create({id:commandId,userId:f.userId,targetId,name:'High impact',description:'test',type:'shell' as const,content:'echo never',level:4,enabled:true,createdAt:Date.now(),updatedAt:Date.now()});
     grants.upsert(f.userId,'client','Client',[1,2,3],false);
     const connector=new FarcmdConnectorImpl(f.db,'http://localhost:5999');
     await assert.rejects(()=>connector.executeCommand({userId:f.userId,clientId:'client',accessToken:'token'},commandId,4),/does not expose/);
