@@ -12,6 +12,8 @@ import { SqliteExecutionHistoryStore } from '../src/execution-history.js';
 import { FarcmdConnectorImpl } from '../src/connector.js';
 import { encryptSecret, decryptSecret } from '../src/crypto-at-rest.js';
 import { confirmationForLevel } from '../src/execution.js';
+import { SqliteCommandKeyStore } from '../src/storage/command-keys.js';
+import { buildCommandRestrictedAuthorizedKey } from '../src/ssh.js';
 
 function fixture(){
   const dir=mkdtempSync(join(tmpdir(),'farcmd-test-'));
@@ -27,7 +29,7 @@ test('database initializes all security-critical tables',()=>{
   const f=fixture();
   try{
     const names=(f.db.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all() as any[]).map(r=>r.name);
-    for(const name of ['users','web_sessions','ssh_keys','ssh_targets','commands','oauth_grants','pending_executions','execution_history','security_events']) assert.ok(names.includes(name),name);
+    for(const name of ['users','web_sessions','ssh_keys','ssh_targets','commands','command_keys','oauth_grants','pending_executions','execution_history','security_events']) assert.ok(names.includes(name),name);
   } finally { cleanup(f); }
 });
 
@@ -51,6 +53,27 @@ test('confirmation policy maps levels 1-3, 4 and 5 correctly',()=>{
   assert.equal(confirmationForLevel(4),'human');
   assert.equal(confirmationForLevel(5),'password');
 });
+ 
+test('command keys are isolated per command and store only encrypted private material',()=>{
+  const f=fixture();
+  try{
+    const keys=new SqliteCommandKeyStore(f.db);
+    const commandA=randomUUID(),commandB=randomUUID(),targetId=randomUUID(),masterId=randomUUID();
+    const now=Date.now();
+    keys.create({id:randomUUID(),userId:f.userId,commandId:commandA,targetId,masterKeyId:masterId,encryptedPrivateKey:'ciphertext',publicKey:'ssh-ed25519 AAAA test',fingerprint:'sha256:test',installedAt:now,createdAt:now,updatedAt:now});
+    assert.ok(keys.get(f.userId,commandA));
+    assert.equal(keys.get(f.userId,commandB),undefined);
+    assert.equal(keys.list(f.userId).length,1);
+  } finally { cleanup(f); }
+});
+
+test('command restricted authorized key binds the exact command and disables forwarding',()=>{
+  const publicKey='ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAItest';
+  const line=buildCommandRestrictedAuthorizedKey(publicKey,'echo "hello"');
+  assert.match(line,/^restrict,command="echo \\"hello\\"" ssh-ed25519 /);
+  assert.throws(()=>buildCommandRestrictedAuthorizedKey(publicKey,'echo bad\\nnext'));
+});
+
 
 test('OAuth grants normalize levels and permanently hide level 5',()=>{
   const f=fixture();
