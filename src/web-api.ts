@@ -12,7 +12,7 @@ const { utils }=ssh2;
 import { SqliteCommandInstallationStore, SqliteRemoteCapabilityLedgerStore } from './storage/command-installations.js';
 import { buildCommandRestrictedAuthorizedKey, buildFarcmdScript, executeAsMaster, farcmdScriptPath, installCommandCapability, removeCommandCapability, sha256Hex, type SshKeyMaterial } from './ssh.js';
 import { SqliteVerificationAuthorityStore, verificationKeyAad, verificationSecretAad, type VerificationAuthorityRecord } from './storage/verification-authorities.js';
-import { generateVerificationSecret, isSafeTargetUsername, renderSudoers, renderVerifierInstallScript, renderVerifierUninstallScript, verificationForcedCommand, verificationKeyComment, verifierPrivilegeFor } from './verification.js';
+import { generateVerificationSecret, isSafeTargetUsername, rootInstallInvocation, renderSudoers, renderVerifierInstallScript, renderVerifierUninstallScript, verificationForcedCommand, verificationKeyComment, verifierPrivilegeFor } from './verification.js';
 import { CapabilityVerificationService, type TargetVerificationResult } from './capability-verification.js';
 import type { SshTargetRecord } from './storage/ssh.js';
 import { SqliteCommandStore, type CommandLevel, type CommandRecord, hashCommandContent } from './command-registry.js';
@@ -105,6 +105,12 @@ export async function mountWebApi(app:FastifyInstance, users:UserStore, sessionS
     secret.fill(0);
     return {record,script};
   };
+  /** Optional sudo password for automatic install/removal. Never stored or logged; used for this request only. */
+  const sudoPasswordFrom=(request:FastifyRequest):string|undefined|null=>{
+    const b=(request.body??{}) as Record<string,unknown>; const v=b.sudoPassword;
+    if(v===undefined||v===null||v==='')return undefined;
+    return typeof v==='string'&&v.length<=1024&&!/[\r\n\0]/.test(v)?v:null;
+  };
   const verifierTarget=async(request:FastifyRequest,reply:FastifyReply)=>{
     const user=await requireUser(request,reply,users,sessions); if(!user)return undefined;
     const target=ssh.getTarget(user.id,(request.params as {id:string}).id); if(!target){reply.code(404).send({error:'SSH target not found'});return undefined;}
@@ -116,10 +122,12 @@ export async function mountWebApi(app:FastifyInstance, users:UserStore, sessionS
     const ctx=await verifierTarget(request,reply);if(!ctx)return; const {user,target}=ctx;
     if(!target.enabled||!target.hostFingerprint)return reply.code(400).send({error:'SSH target must be enabled and have a pinned host fingerprint.'});
     if(!isSafeTargetUsername(target.username))return reply.code(400).send({error:'The target account name is not supported by the verifier.'});
+    const sudoPassword=sudoPasswordFrom(request); if(sudoPassword===null)return reply.code(400).send({error:'Invalid sudo password.'});
     const master=unlockedMaster(user.id,target.sshKeyId); if('error' in master)return reply.code(master.status).send({error:master.error+' Use the manual root install script instead.'});
     const {record,script}=prepareVerifier(user.id,target);
-    try{await executeAsMaster(targetConfig(target),master.key,record.privilege==='root'?'sh -s':'sudo -n sh -s',script);}
-    catch(error){return reply.code(502).send({error:'Verifier installation failed: '+(error instanceof Error?error.message:String(error))+' (automatic installation needs root on the target; use the manual root install script otherwise).'});}
+    const root=rootInstallInvocation(record.privilege,sudoPassword);
+    try{await executeAsMaster(targetConfig(target),master.key,root.command,root.stdinPrefix+script);}
+    catch(error){return reply.code(502).send({error:'Verifier installation failed: '+(error instanceof Error?error.message:String(error))+' (automatic installation needs root on the target: the root account, the account\'s sudo password, or passwordless sudo; otherwise use the manual root install script).'});}
     verifiers.upsert({...record,installedAt:Date.now()});
     const result=await verification.verifyTarget(user.id,target);
     return reply.code(201).send({verifier:verifierStatus(verifiers.getForTarget(user.id,target.id)),verification:verificationSummary(user.id,result)});
@@ -142,9 +150,10 @@ export async function mountWebApi(app:FastifyInstance, users:UserStore, sessionS
     const ctx=await verifierTarget(request,reply);if(!ctx)return; const {user,target}=ctx;
     const v=verifiers.getForTarget(user.id,target.id); if(!v)return reply.code(404).send({error:'No verification authority for this target.'});
     const uninstallScript=renderVerifierUninstallScript(v.id,v.username);
+    const sudoPassword=sudoPasswordFrom(request); if(sudoPassword===null)return reply.code(400).send({error:'Invalid sudo password.'});
     let removed=false; let errorMessage:string|undefined;
     const master=target.enabled&&target.hostFingerprint?unlockedMaster(user.id,target.sshKeyId):{error:'Target is disabled or unpinned.',status:400};
-    if('key' in master){try{await executeAsMaster(targetConfig(target),master.key,v.privilege==='root'?'sh -s':'sudo -n sh -s',uninstallScript);removed=true;}catch(error){errorMessage=error instanceof Error?error.message:'Remote removal failed.';}}
+    if('key' in master){try{const root=rootInstallInvocation(v.privilege,sudoPassword);await executeAsMaster(targetConfig(target),master.key,root.command,root.stdinPrefix+uninstallScript);removed=true;}catch(error){errorMessage=error instanceof Error?error.message:'Remote removal failed.';}}
     else errorMessage=master.error;
     verifiers.delete(user.id,v.id);
     return {ok:true,removed,...(errorMessage?{error:errorMessage}:{}),...(removed?{}:{uninstallScript})};

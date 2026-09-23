@@ -114,16 +114,29 @@ test('capability integrity verification end to end',{skip:skipReason,timeout:300
       const two=await run(cmdL2,2); assert.equal((two as any).stdout,'level-two\n');
     });
 
-    await t.test('automatic verifier install through a (temporarily) root-capable master',{timeout:60_000},async()=>{
-      writeFileSync(tempSudoers,account+' ALL=(root) NOPASSWD: ALL\n',{mode:0o440});
+    await t.test('automatic verifier install with the account\'s sudo password',{timeout:60_000},async()=>{
+      // The account may use sudo only with its password: an attacker holding just a shell (a key) cannot.
+      must('chpasswd',account+':Sudo-Pa55word\n');
+      writeFileSync(tempSudoers,account+' ALL=(root) ALL\n',{mode:0o440});
       try{
-        const r=await api('POST','/api/ssh/targets/'+targetId+'/verifier',{});
+        assert.notEqual((await attacker('sudo -n true')).exitCode,0,'no passwordless root for the account');
+        const none=await api('POST','/api/ssh/targets/'+targetId+'/verifier',{});
+        assert.equal(none.status,502); assert.match(none.body.error,/password is required/);
+        const wrong=await api('POST','/api/ssh/targets/'+targetId+'/verifier',{sudoPassword:'wrong password'});
+        assert.equal(wrong.status,502); assert.match(wrong.body.error,/sudo rejected the password/);
+        assert.equal((await api('GET','/api/ssh/targets/'+targetId+'/verifier')).body.verifier.status,'unavailable');
+        assert.equal(sh('ls /etc/farcmd/*.key 2>/dev/null').stdout,'','nothing was installed with a rejected password');
+        assert.equal((await api('POST','/api/ssh/targets/'+targetId+'/verifier',{sudoPassword:'bad\nline'})).status,400);
+        const r=await api('POST','/api/ssh/targets/'+targetId+'/verifier',{sudoPassword:'Sudo-Pa55word'});
         assert.equal(r.status,201,JSON.stringify(r.body));
+        verifierId=r.body.verifier.id;
         assert.equal(r.body.verifier.status,'active',JSON.stringify(r.body));
         assert.equal(r.body.verification.ok,true,JSON.stringify(r.body.verification));
         verifierId=r.body.verifier.id;
+        assert.notEqual((await attacker('sudo -n true')).exitCode,0,'no sudo timestamp is left behind');
+        const stored=JSON.stringify(db.prepare('SELECT * FROM verification_authorities').all())+JSON.stringify(db.prepare('SELECT * FROM security_events').all());
+        assert.ok(!stored.includes('Sudo-Pa55word'),'the sudo password is never stored');
       }finally{rmSync(tempSudoers,{force:true});}
-      // The account no longer has general root: this is the trust boundary under test.
       assert.notEqual((await attacker('sudo -n true')).exitCode,0);
     });
     const paths=verifierPaths(verifierId!);

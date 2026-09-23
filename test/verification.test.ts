@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { randomBytes, randomUUID } from 'node:crypto';
 import {
   blockingProblems, buildVerificationRequest, evaluateVerification, macVerificationBody, newVerificationNonce, parseVerificationResponse,
-  renderSudoers, renderVerifierInstallScript, renderVerifierProgram, renderVerifierTemplate, verificationForcedCommand, verifierPaths,
+  renderSudoers, renderVerifierInstallScript, rootInstallInvocation, renderVerifierProgram, renderVerifierTemplate, verificationForcedCommand, verifierPaths,
   type VerificationExpectations,
 } from '../src/verification.js';
 import { buildCommandRestrictedAuthorizedKey, sha256Hex } from '../src/ssh.js';
@@ -109,4 +109,15 @@ test('the verifier program accepts nothing but a well-formed challenge on stdin'
       assert.equal(r.status,3); assert.equal(r.stdout,''); assert.match(r.stderr,/not running as root/);
     }
   }finally{rmSync(dir,{recursive:true,force:true});}
+});
+
+test('sudo password for automatic install travels only on stdin, never in the command',()=>{
+  const password='s3cret pass$(id)`x`';
+  const r=rootInstallInvocation('sudo',password);
+  assert.ok(!r.command.includes(password)&&!r.command.includes('s3cret'));
+  assert.equal(r.stdinPrefix,password+'\n');
+  assert.match(r.command,/sudo -S -p '' -v/); assert.match(r.command,/sudo -k/);
+  assert.deepEqual(rootInstallInvocation('sudo'),{command:'sudo -n sh -s',stdinPrefix:''});
+  assert.deepEqual(rootInstallInvocation('root','ignored'),{command:'sh -s',stdinPrefix:''});
+  assert.throws(()=>rootInstallInvocation('sudo','two\nlines'));
 });

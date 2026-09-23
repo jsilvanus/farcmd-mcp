@@ -33,9 +33,11 @@ export function assertVerifierId(id:string):void{ if(!UUID.test(id))throw new Er
 /** Conservative POSIX account name check: the name is embedded in sudoers and in the root-owned verifier. */
 export function isSafeTargetUsername(username:string):boolean{ return /^[a-z_][a-z0-9_-]{0,31}$/.test(username); }
 export function verifierPrivilegeFor(username:string):VerifierPrivilege{ return username==='root'?'root':'sudo'; }
+/** sudoers applies the LAST matching rule and reads /etc/sudoers.d in lexical order, so the argument-free
+ * NOPASSWD rule is named to sort after typical rules (e.g. a password-requiring "user ALL=(ALL) ALL"). */
 export function verifierPaths(id:string){
   assertVerifierId(id);
-  return {program:VERIFIER_DIR+'/verify-'+id,secret:VERIFIER_SECRET_DIR+'/verify-'+id+'.key',sudoers:SUDOERS_DIR+'/farcmd-verify-'+id};
+  return {program:VERIFIER_DIR+'/verify-'+id,secret:VERIFIER_SECRET_DIR+'/verify-'+id+'.key',sudoers:SUDOERS_DIR+'/zz-farcmd-verify-'+id};
 }
 export function verificationKeyComment(id:string):string{ assertVerifierId(id); return 'farcmd-verify:'+id; }
 /** The forced command bound to the verification key. It accepts no client input except the stdin challenge. */
@@ -83,10 +85,28 @@ function asTargetUser(username:string,script:string):string{
   return ['if command -v runuser >/dev/null 2>&1; then','  printf %s '+shq(b64(script))+' | base64 -d | runuser -u '+shq(username)+' -- /bin/sh -s','else','  printf %s '+shq(b64(script))+' | base64 -d | su -s /bin/sh '+shq(username)+' -c "/bin/sh -s"','fi'].join('\n');
 }
 
+/**
+ * How farcmd obtains root for installing/removing the verifier over the master key's SSH session.
+ * The installer script is always sent on stdin. With a sudo password, the password is the first stdin
+ * line: the target shell reads it with the `read` builtin and feeds it to `sudo -S -v` through the
+ * `printf` builtin, so it never appears in any argument list. Only after sudo accepted it is the rest of
+ * stdin (the script) read by `sudo -n sh -s`; a rejected password stops before the script is consumed.
+ * The sudo timestamp (keyed to this shell when there is no terminal) is dropped again with `sudo -k`.
+ */
+export function rootInstallInvocation(privilege:VerifierPrivilege,sudoPassword?:string):{command:string;stdinPrefix:string}{
+  if(privilege==='root')return {command:'sh -s',stdinPrefix:''};
+  if(sudoPassword===undefined||sudoPassword==='')return {command:'sudo -n sh -s',stdinPrefix:''};
+  if(/[\r\n\0]/.test(sudoPassword)||sudoPassword.length>1024)throw new Error('Invalid sudo password.');
+  return {
+    command:"IFS= read -r farcmd_pw || exit 1; printf '%s\\n' \"$farcmd_pw\" | command sudo -S -p '' -v 2>/dev/null || { echo 'farcmd: sudo rejected the password (or the account may not use sudo)' >&2; exit 1; }; unset farcmd_pw; command sudo -n sh -s; rc=$?; command sudo -k; exit $rc",
+    stdinPrefix:sudoPassword+'\n',
+  };
+}
+
 export interface VerifierInstallParams { id:string; username:string; privilege:VerifierPrivilege; secret:Buffer; authorizedKeyLine:string; }
 /**
- * POSIX sh installer that must run as root on the target (farcmd pipes it into `sudo -n sh -s` via the
- * master key, or an administrator runs it manually). It contains the verification secret: it is only
+ * POSIX sh installer that must run as root on the target (farcmd pipes it into sudo via the master key,
+ * see rootInstallInvocation, or an administrator runs it manually). It contains the verification secret: it is only
  * ever sent on stdin, never on a command line, and must not be stored on the target.
  */
 export function renderVerifierInstallScript(p:VerifierInstallParams):string{

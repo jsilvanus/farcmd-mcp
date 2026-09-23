@@ -6,7 +6,7 @@ import { SqliteVerificationAuthorityStore, verificationKeyAad, verificationSecre
 import type { SshTargetRecord } from './storage/ssh.js';
 import {
   blockingProblems, buildVerificationRequest, evaluateVerification, newVerificationNonce, parseVerificationResponse, renderVerifierTemplate,
-  VerificationError, type ExpectedCapability, type VerificationEvaluation, type VerificationExpectations, type VerificationProblem, type VerificationReport,
+  VerificationError, verifierPaths, type ExpectedCapability, type VerificationEvaluation, type VerificationExpectations, type VerificationProblem, type VerificationReport,
 } from './verification.js';
 
 export class IntegrityVerificationUnavailable extends Error { constructor(message:string){super(message);this.name='IntegrityVerificationUnavailable';} }
@@ -62,7 +62,7 @@ export class CapabilityVerificationService {
       // The command string is ignored by the forced-command key; only the stdin challenge reaches the verifier.
       ({stdout,stderr,exitCode,truncated}=await session.exec('farcmd-verify',{stdin:buildVerificationRequest(nonce),timeoutMs:30_000}));
     }catch(error){throw new VerificationError('Verifier unreachable: '+(error instanceof Error?error.message:String(error)));}
-    if(exitCode!==0)throw new VerificationError('Verifier failed'+(stderr.trim()?': '+stderr.trim().split('\n').slice(-1)[0]!.slice(0,300):' (exit '+exitCode+')')+'.');
+    if(exitCode!==0)throw new VerificationError('Verifier failed'+(stderr.trim()?': '+stderr.trim().split('\n').slice(-1)[0]!.slice(0,300):' (exit '+exitCode+')')+'.'+(/password is required/.test(stderr)?' A later sudoers rule for this account overrides the farcmd verifier rule (sudo uses the last matching rule); make sure '+verifierPaths(authority.id).sudoers+' is read last.':''));
     if(truncated)throw new VerificationError('Verifier response exceeded the output limit.');
     const report=parseVerificationResponse(stdout,secret,nonce);
     return {report,evaluation:evaluateVerification(report,this.expectations(authority,target))};

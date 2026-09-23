@@ -79,7 +79,7 @@ COMMAND KEY (command_installations)   execution authority for exactly one capabi
 |---|---|---|
 | `/usr/local/libexec/farcmd/verify-<id>` | root:root 0755 | Verifier (Python 3 stdlib, run as `python3 -IS`) |
 | `/etc/farcmd/verify-<id>.key` | root:root 0600 (dir 0700) | HMAC secret |
-| `/etc/sudoers.d/farcmd-verify-<id>` | root:root 0440 | `<account> ALL=(root) NOPASSWD: /usr/local/libexec/farcmd/verify-<id> ""` |
+| `/etc/sudoers.d/zz-farcmd-verify-<id>` | root:root 0440 | `<account> ALL=(root) NOPASSWD: /usr/local/libexec/farcmd/verify-<id> ""` (named `zz-…` because sudo applies the *last* matching rule and reads this directory alphabetically; a later password-requiring rule for the account would otherwise override it) |
 | `~<account>/.ssh/authorized_keys` | account | `restrict,command="sudo -n /usr/local/libexec/farcmd/verify-<id>" ssh-ed25519 … farcmd-verify:<id>` |
 
 - The sudoers rule allows **only** that program with **no arguments** (`""`). sudo resets the
@@ -202,7 +202,7 @@ future hardening mode, not part of this change.
 | Event | Behaviour |
 |---|---|
 | Target created | No verifier: L3–L5 blocked (the UI says so on the SSH and Commands pages). L1/L2 work. |
-| **Install, automatic** (`POST /api/ssh/targets/:id/verifier`) | Needs the unlocked master **and** root via that master (root account or `sudo -n`). The installer is piped to `sudo -n sh -s` on **stdin**, so the secret is never in argv. farcmd then runs a verification and activates. |
+| **Install, automatic** (`POST /api/ssh/targets/:id/verifier`) | Needs the unlocked master **and** root via that master: the root account, the account's **sudo password** (asked in the UI), or passwordless sudo. The installer is sent on **stdin**, so the secret is never in argv. farcmd then runs a verification and activates. |
 | **Install, manual** (`POST …/verifier/manual`) | Works **without any master**. farcmd shows the root install script once (it contains the secret). An administrator runs it as root, then clicks *Verify now*. Recommended when the master account should not have root. |
 | Activation | The first authenticated response whose verifier-level checks pass sets `status=active` and records the interpreter path and verifier hash. Until then, L3–L5 are blocked. |
 | **Master deleted** | Allowed as before. Verification uses only the verification key and secret, so L3–L5 keep working (tested for L3, L4 and L5). Provisioning, replacement, automatic verifier repair and remote cleanup become unavailable (tested). Local removals go to the remote-capability ledger, and ledger-pending scripts are tolerated by the namespace check. |
@@ -211,6 +211,8 @@ future hardening mode, not part of this change.
 | New master uploaded later | Can provision again, run ledger cleanup, and repair the verifier automatically if it has root. |
 | Verification authority removed (`DELETE …/verifier`) | L3–L5 blocked. Remote removal uses the master if possible; otherwise a root uninstall script (no secrets) is shown. |
 | Target deletion | Refused while a verifier (or installed capability) exists. |
+
+**Sudo password for automatic install/removal.** The web UI asks for the target account's sudo password (optional). It is used for that one request only: it is not stored, not logged, and not echoed back in errors. It travels as the first line of the SSH session's stdin. On the target the shell reads it with the `read` builtin and passes it to `sudo -S -p '' -v` through the `printf` builtin, so it never appears in a process argument list. Only after sudo accepts it does `sudo -n sh -s` read the rest of stdin (the installer). A wrong password stops before the installer, and its secret, is read by anything. The sudo timestamp (tied to that shell when there is no terminal) is dropped with `sudo -k` afterwards. Password-protected sudo fits the trust model: an attacker who only holds a shell or key for the account doesn't know the password. Passwordless sudo doesn't fit it, so a passwordless grant should be temporary.
 
 **Install-time trust.** Automatic installation runs through the target account's SSH session, so it
 assumes that account is not compromised *at install time* (its shell start-up files run before
