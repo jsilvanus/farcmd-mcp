@@ -12,6 +12,9 @@ import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { SqliteAuthStore } from '../storage/sqlite.js';
 import { UserAdmin, UserAdminError } from '../user-admin.js';
+import { AuditLog } from '../audit.js';
+import { chmodSync, existsSync, statSync } from 'node:fs';
+import { resolve } from 'node:path';
 
 const USAGE=`farcmd-admin — manage farcmd users and settings
 
@@ -24,6 +27,8 @@ Usage:
   farcmd-admin user logout --email <email>
   farcmd-admin user delete --email <email> [--yes] [--force]
   farcmd-admin registration status|enable|disable
+  farcmd-admin backup <file>
+  farcmd-admin audit verify
 
 Environment:
   STORAGE_PATH            database file (default ./data/app.sqlite)
@@ -35,6 +40,9 @@ Examples:
 
 user disable   blocks sign-in, web sessions, OAuth tokens and MCP access immediately (reversible).
 user logout    ends all web sessions and OAuth refresh tokens of the user.
+backup         consistent online copy of the database (safe while the server runs). Back up
+               FARCMD_ENCRYPTION_KEY separately: without it the copy's credentials and audit chain are unusable.
+audit verify   recompute the audit log's hash chain (exit 1 if it is broken).
 user delete    removes the user and all their farcmd data; refused while capabilities or verifiers
                remain installed on remote hosts unless --force (remove them in the web UI first).`;
 
@@ -93,6 +101,23 @@ export async function main(argv:string[]):Promise<number>{
     else if(action!=='status'&&action!==undefined)throw new UsageError('Unknown registration action: '+action);
     process.stdout.write('Self-service registration is '+(admin.registrationEnabled()?'ENABLED':'disabled')+'.\n');
     return 0;
+  }
+  if(area==='backup'){
+    if(!action)throw new UsageError('backup needs a target file.');
+    const target=resolve(action);
+    if(existsSync(target))throw new UserAdminError('Refusing to overwrite existing file '+target+'.');
+    // VACUUM INTO writes a transactionally consistent copy without stopping the server.
+    store.getDatabase().prepare('VACUUM INTO ?').run(target);
+    chmodSync(target,0o600);
+    new AuditLog(store.getDatabase()).record({event:'admin.backup',actor:'system',targetType:'file',targetId:target,details:{bytes:statSync(target).size}});
+    process.stdout.write('Backup written to '+target+' ('+statSync(target).size+' bytes, mode 0600). Keep FARCMD_ENCRYPTION_KEY with it, stored separately.\n');
+    return 0;
+  }
+  if(area==='audit'){
+    if(action!=='verify')throw new UsageError('Unknown audit action: '+(action??'(none)'));
+    const v=new AuditLog(store.getDatabase()).verify();
+    if(v.ok){process.stdout.write('Audit chain intact: '+v.checked+' entries verified'+(v.legacy?', '+v.legacy+' older unchained':'')+(v.headHash?'. Head #'+v.headSeq+' '+v.headHash:'')+'.\n');return 0;}
+    process.stdout.write('AUDIT CHAIN BROKEN at entry #'+v.brokenAtSeq+': '+v.reason+'\n');return 1;
   }
   if(area!=='user')throw new UsageError('Unknown command: '+area);
   switch(action){
