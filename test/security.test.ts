@@ -190,7 +190,7 @@ test('connector creates L4 confirmation without executing SSH',async()=>{
     const targetId=randomUUID(), commandId=randomUUID(), keyId=randomUUID();
     f.db.prepare('INSERT INTO ssh_keys (id,user_id,name,encrypted_private_key,created_at,updated_at) VALUES (?,?,?,?,?,?)').run(keyId,f.userId,'key','1.x.x',Date.now(),Date.now());
     f.db.prepare('INSERT INTO ssh_targets (id,user_id,name,hostname,port,username,ssh_key_id,host_fingerprint,enabled,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)').run(targetId,f.userId,'target','localhost',22,'user',keyId,'sha256:abc',1,Date.now(),Date.now());
-    commands.create({id:commandId,userId:f.userId,targetId,name:'High impact',description:'test',shellCommand:'echo never',level:4,enabled:true,createdAt:Date.now(),updatedAt:Date.now()});
+    commands.create({id:commandId,userId:f.userId,targetId,name:'High impact',description:'test',type:'shell' as const,content:'echo never',level:4,enabled:true,createdAt:Date.now(),updatedAt:Date.now()});
     grants.upsert(f.userId,'client','Client',[4],false);
     const connector=new FarcmdConnectorImpl(f.db,'http://localhost:5999');
     const result=await connector.executeCommand({userId:f.userId,clientId:'client',accessToken:'token'},commandId,4);
