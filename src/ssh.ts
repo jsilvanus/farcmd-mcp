@@ -83,8 +83,8 @@ export async function executeSshCommand(target:SshTargetConfig,key:SshKeyMateria
 
 export function buildCommandRestrictedAuthorizedKey(publicKey:string,command:string):string {
   if(/\r|\n/.test(publicKey)||/\r|\n/.test(command))throw new Error('SSH public key and command must be single-line values.');
-  if(!/^ssh-(?:ed25519|rsa)\\s+\\S+/.test(publicKey))throw new Error('Unsupported generated SSH public key.');
-  const escapedCommand=command.replaceAll('\\\\','\\\\\\\\').replaceAll('"','\\\\"');
+  if(!/^ssh-(?:ed25519|rsa)\s+\S+/.test(publicKey))throw new Error('Unsupported generated SSH public key.');
+  const escapedCommand=command.replaceAll('\\','\\\\').replaceAll('"','\\"');
   return 'restrict,command="'+escapedCommand+'" '+publicKey.trim();
 }
 
