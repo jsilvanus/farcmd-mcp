@@ -5,6 +5,7 @@ export interface SshKeyMaterial { privateKey: string; passphrase?: string; }
 export interface SshTargetConfig { hostname:string; port:number; username:string; hostFingerprint?:string; }
 export interface SshTestResult { ok:boolean; fingerprint?:string; error?:string; }
 export interface SshExecResult { exitCode:number|null; signal?:string; stdout:string; stderr:string; durationMs:number; truncated?:boolean; }
+export function sha256Hex(value:string):string{return createHash('sha256').update(value,'utf8').digest('hex');}
 const MAX_OUTPUT_BYTES=Number(process.env.FARCMD_MAX_OUTPUT_BYTES??'262144');
 if(!Number.isSafeInteger(MAX_OUTPUT_BYTES)||MAX_OUTPUT_BYTES<4096||MAX_OUTPUT_BYTES>10_485_760)throw new Error('FARCMD_MAX_OUTPUT_BYTES must be 4096-10485760');
 
@@ -110,7 +111,7 @@ export async function installCommandCapability(target:SshTargetConfig,masterKey:
   const encodedKey=Buffer.from(authorizedKey,'utf8').toString('base64');
   const encodedScript=Buffer.from(script,'utf8').toString('base64');
   const encodedPath=Buffer.from(remoteScriptPath,'utf8').toString('base64');
-  const command=['set -eu','umask 077','mkdir -p ~/.ssh/farcmd','chmod 700 ~/.ssh ~/.ssh/farcmd 2>/dev/null || true','key=$(printf %s '+encodedKey+' | base64 -d)','path=$(printf %s '+encodedPath+' | base64 -d)','script=$(printf %s '+encodedScript+' | base64 -d)','tmp=$(mktemp ~/.ssh/farcmd/.install.XXXXXX)','printf "%s\\n" "$script" > "$tmp"','chmod 700 "$tmp"','mv "$tmp" "$path"','touch ~/.ssh/authorized_keys','chmod 600 ~/.ssh/authorized_keys','if ! grep -Fqx -- "$key" ~/.ssh/authorized_keys; then printf "%s\\n" "$key" >> ~/.ssh/authorized_keys; fi'].join('; ');
+  const command=['set -eu','umask 077','mkdir -p ~/.ssh/farcmd','chmod 700 ~/.ssh ~/.ssh/farcmd 2>/dev/null || true','key=$(printf %s '+encodedKey+' | base64 -d)','path=$(printf %s '+encodedPath+' | base64 -d)','script=$(printf %s '+encodedScript+' | base64 -d)','tmp=$(mktemp ~/.ssh/farcmd/.install.XXXXXX)','printf "%s\\n" "$script" > "$tmp"','chmod 500 "$tmp"','mv "$tmp" "$path"','touch ~/.ssh/authorized_keys','chmod 600 ~/.ssh/authorized_keys','if ! grep -Fqx -- "$key" ~/.ssh/authorized_keys; then printf "%s\\n" "$key" >> ~/.ssh/authorized_keys; fi'].join('; ');
   await executeAsMaster(target,masterKey,command);
 }
 export async function removeCommandCapability(target:SshTargetConfig,masterKey:SshKeyMaterial,authorizedKey:string,remoteScriptPath:string):Promise<void>{
@@ -118,4 +119,48 @@ export async function removeCommandCapability(target:SshTargetConfig,masterKey:S
   const encodedPath=Buffer.from(remoteScriptPath,'utf8').toString('base64');
   const legacyPublicKey=/^ssh-(?:ed25519|rsa)\\s+\\S+/.test(authorizedKey); const command=legacyPublicKey ? 'set -eu; key=$(printf %s '+encodedKey+' | base64 -d); path=$(printf %s '+encodedPath+' | base64 -d); if [ -f ~/.ssh/authorized_keys ]; then tmp=$(mktemp ~/.ssh/authorized_keys.farcmd.XXXXXX); grep -Fv -- " $key" ~/.ssh/authorized_keys > "$tmp" || test $? -eq 1; chmod 600 "$tmp"; mv "$tmp" ~/.ssh/authorized_keys; fi; rm -f -- "$path"' : 'set -eu; key=$(printf %s '+encodedKey+' | base64 -d); path=$(printf %s '+encodedPath+' | base64 -d); if [ -f ~/.ssh/authorized_keys ]; then tmp=$(mktemp ~/.ssh/authorized_keys.farcmd.XXXXXX); grep -Fvx -- "$key" ~/.ssh/authorized_keys > "$tmp" || test $? -eq 1; chmod 600 "$tmp"; mv "$tmp" ~/.ssh/authorized_keys; fi; rm -f -- "$path"';
   await executeAsMaster(target,masterKey,command);
+}
+
+
+export interface CommandCapabilityIntegrity {
+  ok:boolean;
+  commandMatch:boolean;
+  scriptMatch:boolean;
+  authorizedKeyMatch:boolean;
+  actualScriptSha256?:string;
+  actualAuthorizedKeySha256?:string;
+  error?:string;
+}
+
+export async function verifyCommandCapabilityIntegrity(
+  target:SshTargetConfig,
+  masterKey:SshKeyMaterial,
+  remoteScriptPath:string,
+  authorizedKeyLine:string,
+  expectedScriptSha256:string,
+  expectedAuthorizedKeySha256:string,
+):Promise<CommandCapabilityIntegrity>{
+  const encodedPath=Buffer.from(remoteScriptPath,'utf8').toString('base64');
+  const encodedKey=Buffer.from(authorizedKeyLine,'utf8').toString('base64');
+  const command=[
+    'set -eu',
+    'path=$(printf %s '+encodedPath+' | base64 -d)',
+    'key=$(printf %s '+encodedKey+' | base64 -d)',
+    'test -f "$path"',
+    'script_hash=$(sha256sum -- "$path" | awk \'{print $1}\')',
+    'key_present=false',
+    'if grep -Fqx -- "$key" ~/.ssh/authorized_keys; then key_present=true; fi',
+    'key_hash=$(printf %s "$key" | sha256sum | awk \'{print $1}\')',
+    'printf \'%s\\n%s\\n\' "$script_hash" "$key_present"',
+  ].join('; ');
+  try{
+    const result=await executeAsMaster(target,masterKey,command);
+    const [actualScriptSha256,keyPresent]=result.stdout.trim().split(/\\r?\\n/);
+    const actualAuthorizedKeySha256=sha256Hex(authorizedKeyLine);
+    const scriptMatch=actualScriptSha256===expectedScriptSha256;
+    const authorizedKeyMatch=keyPresent==='true' && actualAuthorizedKeySha256===expectedAuthorizedKeySha256;
+    return {ok:scriptMatch&&authorizedKeyMatch,commandMatch:true,scriptMatch,authorizedKeyMatch,...(actualScriptSha256?{actualScriptSha256}:{}),actualAuthorizedKeySha256};
+  }catch(error){
+    return {ok:false,commandMatch:true,scriptMatch:false,authorizedKeyMatch:false,error:error instanceof Error?error.message:'Integrity check failed.'};
+  }
 }
