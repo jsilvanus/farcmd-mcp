@@ -6,6 +6,7 @@ export interface SshKeyRecord {
   name: string;
   encryptedPrivateKey: string;
   fingerprint?: string;
+  publicKey?: string;
   createdAt: number;
   updatedAt: number;
 }
@@ -28,7 +29,7 @@ export class SqliteSshStore {
   constructor(private readonly db: DatabaseSync) {}
 
   listKeys(userId: string): SshKeyRecord[] {
-    const rows = this.db.prepare('SELECT id,user_id,name,encrypted_private_key,fingerprint,created_at,updated_at FROM ssh_keys WHERE user_id=? ORDER BY name,id').all(userId) as Array<any>;
+    const rows = this.db.prepare('SELECT id,user_id,name,encrypted_private_key,fingerprint,public_key,created_at,updated_at FROM ssh_keys WHERE user_id=? ORDER BY name,id').all(userId) as Array<any>;
     return rows.map(this.mapKey).filter((k):k is SshKeyRecord=>k!==undefined);
   }
 
@@ -37,11 +38,11 @@ export class SqliteSshStore {
   }
 
   createKey(record: SshKeyRecord): void {
-    this.db.prepare('INSERT INTO ssh_keys (id,user_id,name,encrypted_private_key,fingerprint,created_at,updated_at) VALUES (?,?,?,?,?,?,?)').run(record.id,record.userId,record.name,record.encryptedPrivateKey,record.fingerprint??null,record.createdAt,record.updatedAt);
+    this.db.prepare('INSERT INTO ssh_keys (id,user_id,name,encrypted_private_key,fingerprint,public_key,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)').run(record.id,record.userId,record.name,record.encryptedPrivateKey,record.fingerprint??null,record.publicKey??null,record.createdAt,record.updatedAt);
   }
 
   updateKey(record: SshKeyRecord): void {
-    this.db.prepare('UPDATE ssh_keys SET name=?,encrypted_private_key=?,fingerprint=?,updated_at=? WHERE user_id=? AND id=?').run(record.name,record.encryptedPrivateKey,record.fingerprint??null,record.updatedAt,record.userId,record.id);
+    this.db.prepare('UPDATE ssh_keys SET name=?,encrypted_private_key=?,fingerprint=?,public_key=?,updated_at=? WHERE user_id=? AND id=?').run(record.name,record.encryptedPrivateKey,record.fingerprint??null,record.publicKey??null,record.updatedAt,record.userId,record.id);
   }
 
   deleteKey(userId: string, id: string): void {
@@ -71,6 +72,7 @@ export class SqliteSshStore {
 
   private mapKey = (row:any): SshKeyRecord|undefined => row ? {
     id:row.id,userId:row.user_id,name:row.name,encryptedPrivateKey:row.encrypted_private_key,
+    ...(row.public_key ? {publicKey:row.public_key} : {}),
     ...(row.fingerprint ? {fingerprint:row.fingerprint} : {}),createdAt:row.created_at,updatedAt:row.updated_at
   } : undefined;
 
