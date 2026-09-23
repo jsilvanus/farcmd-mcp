@@ -8,7 +8,7 @@ import { REFRESH_TOKEN_LIFETIME_MS } from './tokens.js';
 
 const LEVELS=[1,2,3,4,5] as const;
 
-function escapeHtml(value:string):string{return value.replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'","&#39;");}
+function escapeHtml(value:string):string{return value.replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'","&#39;');}
 function page(title:string,body:string):string{return '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>'+escapeHtml(title)+'</title><style>body{font-family:system-ui,sans-serif;background:#f6f7f9;margin:0;padding:4rem 1rem}main{max-width:520px;margin:0 auto;background:#fff;padding:2rem;border-radius:12px;box-shadow:0 8px 30px rgba(0,0,0,.08)}h1{margin-top:0}label{display:block;margin:.9rem 0 .35rem}input{margin-right:.5rem}button{margin-top:1rem;padding:.7rem 1.1rem;border:0;border-radius:7px;cursor:pointer}.secondary{margin-left:.5rem;background:#eee}.error{color:#b00020}.level{padding:.7rem 0;border-top:1px solid #eee}.muted{color:#666;font-size:.9rem}</style></head><body><main>'+body+'</main></body></html>';}
 function loginPage(oauth:string,error?:string):string{return page('farcmd sign in','<h1>Sign in</h1><p>Sign in to authorize this MCP client.</p>'+(error?'<p class="error">'+escapeHtml(error)+'</p>':'')+'<form method="post" action="/oauth/authorize"><input type="hidden" name="oauth" value="'+escapeHtml(oauth)+'"><label for="email">Email</label><input id="email" name="email" type="email" autocomplete="username" required autofocus><label for="password">Password</label><input id="password" name="password" type="password" autocomplete="current-password" required><button type="submit">Sign in</button></form>');}
 function consentPage(session:string,userName:string,clientName:string,current:number[],permanent5:boolean):string{
@@ -49,7 +49,9 @@ export async function mountAuthorizationServer(app:FastifyInstance,issuer:string
   authStore.upsertOAuthGrant(user.id,q.client_id!,metadata.client_name,allowed,permanent5||!!existing?.level5PermanentlyHidden);
   authStore.recordSecurityEvent?.(user.id,q.client_id,'oauth.authorize',{clientName:metadata.client_name,decision:'approved',visibleLevels:allowed,level5PermanentlyHidden:permanent5||!!existing?.level5PermanentlyHidden,previousVisibleLevels:existing?.visibleLevels??null});
   const code=randomToken();authStore.oauthTokens().saveAuthorizationCode(code,{clientId:q.client_id!,redirectUri:q.redirect_uri!,challenge:q.code_challenge!,subject:user.id,scope:q.scope??'mcp',expires:Date.now()+60_000});
-  target.searchParams.set('code',code);\n  request.log.info({event:'oauth.authorization_redirect',clientId:q.client_id,redirectUri:q.redirect_uri,hasState:Boolean(q.state),issuer,hasCode:true},'OAuth authorization redirect');\n  return reply.redirect(target.toString());
+  target.searchParams.set('code',code);
+  request.log.info({event:'oauth.authorization_redirect',clientId:q.client_id,redirectUri:q.redirect_uri,hasState:Boolean(q.state),issuer,hasCode:true},'OAuth authorization redirect');
+  return reply.redirect(target.toString());
  });
  app.post('/oauth/token',async(request,reply)=>{
   const b=request.body as Record<string,string|undefined>;
@@ -70,7 +72,6 @@ export async function mountAuthorizationServer(app:FastifyInstance,issuer:string
    return {access_token:access,token_type:'Bearer',expires_in:3600,refresh_token:refreshToken,scope:code.scope};
   }
   if(b.grant_type==='refresh_token'){
-   // Validate client, grant and account before consuming, so a mismatched request cannot burn a valid token.
    const current=b.refresh_token?tokens.peekRefreshToken(b.refresh_token):undefined;
    if(!current||!b.refresh_token)return denied(undefined,b.client_id,'refresh_token','unknown or expired refresh token');
    if(b.client_id!==current.clientId)return denied(current.subject,b.client_id,'refresh_token','client mismatch');
