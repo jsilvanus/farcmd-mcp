@@ -9,7 +9,7 @@ export type CommandType = 'shell'|'bash_script';
 
 export interface CommandRecord {
   id:string; userId:string; targetId:string; name:string; description:string;
-  type:CommandType; content:string; level:CommandLevel; enabled:boolean; createdAt:number; updatedAt:number;
+  type:CommandType; content:string; commandSha256?:string; level:CommandLevel; enabled:boolean; createdAt:number; updatedAt:number;
 }
 
 export class SqliteCommandStore {
@@ -23,5 +23,5 @@ export class SqliteCommandStore {
   clearExecutionPassword(userId:string,id:string):void{this.db.prepare('UPDATE commands SET execution_password_hash=NULL,updated_at=? WHERE user_id=? AND id=?').run(Date.now(),userId,id);}
   setExecutionPassword(userId:string,id:string,passwordHash:string):void{const result=this.db.prepare('UPDATE commands SET execution_password_hash=?,updated_at=? WHERE user_id=? AND id=? AND level=5').run(passwordHash,Date.now(),userId,id);if(Number(result.changes)!==1)throw new Error('Level 5 command not found.');}
   async verifyExecutionPassword(userId:string,id:string,password:string):Promise<boolean>{const r=this.db.prepare('SELECT execution_password_hash FROM commands WHERE user_id=? AND id=? AND level=5').get(userId,id) as any;return !!r?.execution_password_hash&&await verify(r.execution_password_hash,password);}
-  private map=(r:any):CommandRecord|undefined=>r?{id:r.id,userId:r.user_id,targetId:r.target_id,name:r.name,description:r.description,type:(r.type==='bash_script'?'bash_script':'shell'),content:r.content,level:r.level as CommandLevel,enabled:!!r.enabled,createdAt:r.created_at,updatedAt:r.updated_at}:undefined;
+  private map=(r:any):CommandRecord|undefined=>r?{id:r.id,userId:r.user_id,targetId:r.target_id,name:r.name,description:r.description,type:(r.type==='bash_script'?'bash_script':'shell'),content:r.content,...(r.command_sha256?{commandSha256:r.command_sha256}:{}),level:r.level as CommandLevel,enabled:!!r.enabled,createdAt:r.created_at,updatedAt:r.updated_at}:undefined;
 }
