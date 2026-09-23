@@ -1,8 +1,8 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { randomUUID } from 'node:crypto';
 import { decryptSecret } from './crypto-at-rest.js';
-import { getSshPassphrase } from './ssh-key-cache.js';
-import { executeSshCommand, inspectPrivateKey, verifyCommandCapabilityIntegrity } from './ssh.js';
+import { executeSshCommand, openSshSession, sha256Hex, type SshExecResult, type SshSession } from './ssh.js';
+import { CapabilityVerificationService } from './capability-verification.js';
 import { SqliteSshStore } from './storage/ssh.js';
 import { SqliteCommandStore, type CommandLevel, hashCommandContent } from './command-registry.js';
 import { SqliteCommandInstallationStore } from './storage/command-installations.js';
@@ -24,9 +24,9 @@ export interface FarcmdConnector {
 }
 
 export class FarcmdConnectorImpl implements FarcmdConnector {
-  private readonly ssh:SqliteSshStore; private readonly commands:SqliteCommandStore; private readonly grants:SqliteOAuthGrantStore; private readonly pending:SqliteExecutionStore;  private readonly history:SqliteExecutionHistoryStore; private readonly installations:SqliteCommandInstallationStore;
+  private readonly ssh:SqliteSshStore; private readonly commands:SqliteCommandStore; private readonly grants:SqliteOAuthGrantStore; private readonly pending:SqliteExecutionStore;  private readonly history:SqliteExecutionHistoryStore; private readonly installations:SqliteCommandInstallationStore; private readonly verifier:CapabilityVerificationService;
   constructor(private readonly db:DatabaseSync,private readonly publicUrl:string){
-    this.ssh=new SqliteSshStore(db); this.commands=new SqliteCommandStore(db); this.grants=new SqliteOAuthGrantStore(db); this.pending=new SqliteExecutionStore(db); this.pending.cleanup(); this.history=new SqliteExecutionHistoryStore(db); this.installations=new SqliteCommandInstallationStore(db);
+    this.ssh=new SqliteSshStore(db); this.commands=new SqliteCommandStore(db); this.grants=new SqliteOAuthGrantStore(db); this.pending=new SqliteExecutionStore(db); this.pending.cleanup(); this.history=new SqliteExecutionHistoryStore(db); this.installations=new SqliteCommandInstallationStore(db); this.verifier=new CapabilityVerificationService(db,publicUrl);
   }
   async health(_context:ConnectorContext):Promise<{ok:true}>{return {ok:true};}
   visibleLevels(context:ConnectorContext):CommandLevel[]{const grant=this.grants.get(context.userId,context.clientId);return grant&&!grant.revokedAt?[...grant.visibleLevels]:[];}
@@ -68,31 +68,46 @@ export class FarcmdConnectorImpl implements FarcmdConnector {
     }
     const result=await this.executeStoredCommand(p.userId,p.clientId,p.commandId,p.level); audit('confirmation_executed',{commandId:p.commandId,level:p.level}); this.pending.complete(token,{exitCode:result.exitCode,stdout:result.stdout,stderr:result.stderr,durationMs:result.durationMs,...(result.signal?{signal:result.signal}:{})}); return result;
   }
+  private audit(userId:string,clientId:string,event:string,details?:unknown):void{try{this.db.prepare('INSERT INTO security_events (id,user_id,client_id,event,details,created_at) VALUES (?,?,?,?,?,?)').run(randomUUID(),userId,clientId,event,details===undefined?null:JSON.stringify(details),Date.now());}catch{}}
   private async executeStoredCommand(userId:string,clientId:string,commandId:string,level:CommandLevel):Promise<CommandExecution>{
     const command=this.commands.get(userId,commandId); if(!command||!command.enabled||command.level!==level)throw new Error('Command is no longer available.');
     const target=this.ssh.getTarget(userId,command.targetId); if(!target||!target.enabled)throw new Error('SSH target is unavailable.');
     if(!target.hostFingerprint)throw new Error('SSH target has no pinned host fingerprint.');
     const installation=this.installations.get(userId,commandId);
     if(!installation?.installedAt)throw new Error('This command has no installed SSH capability.');
+    // Local consistency: the stored command definition and the stored capability baseline must agree.
     const expectedCommandHash=hashCommandContent(command.type,command.content);
     if(!installation.commandSha256||installation.commandSha256!==expectedCommandHash)throw new Error('Command capability integrity check failed: stored command definition does not match the installed capability.');
-    if(level>=3){
-      const master=this.ssh.getKey(userId,installation.masterKeyId);
-      if(!master)throw new Error('Command integrity verification requires the provisioning master key, which is no longer available.');
-      let masterPrivateKey:string;
-      try{masterPrivateKey=decryptSecret(master.encryptedPrivateKey,'ssh-key:'+userId+':'+master.id);}catch{throw new Error('Unable to decrypt the provisioning master key for integrity verification.');}
-      const masterPassphrase=getSshPassphrase(userId,master.id);
-      const inspected=inspectPrivateKey(masterPrivateKey,masterPassphrase);
-      if(!inspected.valid)throw new Error(inspected.encrypted&&!masterPassphrase?'Provisioning master key is locked; unlock it before executing this command.':'Provisioning master key is invalid.');
-      if(!installation.scriptSha256||!installation.authorizedKeySha256)throw new Error('This command capability has no integrity baseline; recreate the capability before executing it.');
-      const integrity=await verifyCommandCapabilityIntegrity({hostname:target.hostname,port:target.port,username:target.username,hostFingerprint:target.hostFingerprint},{privateKey:masterPrivateKey,...(masterPassphrase!==undefined?{passphrase:masterPassphrase}: {})},installation.remoteScriptPath,installation.authorizedKeyLine,installation.scriptSha256,installation.authorizedKeySha256);
-      if(!integrity.ok)throw new Error('Command capability integrity check failed: the remote script or authorized_keys entry has changed.');
-    }
+    if((installation.scriptContent!==undefined&&installation.scriptSha256&&sha256Hex(installation.scriptContent)!==installation.scriptSha256)||(installation.authorizedKeySha256&&sha256Hex(installation.authorizedKeyLine)!==installation.authorizedKeySha256))throw new Error('Command capability integrity check failed: stored capability baseline is inconsistent.');
     const privateKey=decryptSecret(installation.encryptedPrivateKey,'command-installation:'+userId+':'+installation.id);
+    const config={hostname:target.hostname,port:target.port,username:target.username,hostFingerprint:target.hostFingerprint};
     const startedAt=Date.now();
-    const result=await executeSshCommand({hostname:target.hostname,port:target.port,username:target.username,hostFingerprint:target.hostFingerprint},{privateKey},'true');
+    let result:SshExecResult;
+    if(level>=3){
+      // Remote integrity verification immediately before execution. The execution connection is
+      // authenticated concurrently (authentication runs nothing on the target), and its exec request is
+      // sent only after verification succeeded, keeping the check-to-use window to one channel round trip.
+      let sessionPromise:Promise<SshSession>|undefined;
+      try{
+        this.verifier.assertAvailable(userId,target);
+        sessionPromise=openSshSession(config,{privateKey}); sessionPromise.catch(()=>undefined);
+        await this.verifier.assertCommandIntact(userId,target,commandId);
+      }
+      catch(error){
+        sessionPromise?.then(s=>s.close(),()=>undefined);
+        const message=error instanceof Error?error.message:String(error);
+        this.audit(userId,clientId,'integrity_verification_blocked',{commandId,level,error:message});
+        this.history.create({id:randomUUID(),userId,clientId,commandId,commandName:command.name,targetId:target.id,level,startedAt,endedAt:Date.now(),durationMs:Date.now()-startedAt,exitCode:null,stdout:'',stderr:'',status:'blocked',error:message});
+        throw new Error('Execution blocked: '+message);
+      }
+      this.audit(userId,clientId,'integrity_verification_passed',{commandId,level});
+      try{result=await (await sessionPromise!).exec('true');}
+      catch(error){result={exitCode:null,stdout:'',stderr:error instanceof Error?error.message:String(error),durationMs:Date.now()-startedAt};}
+    } else {
+      result=await executeSshCommand(config,{privateKey},'true');
+    }
     const status=result.signal==='TIMEOUT'?'timeout':result.exitCode===0?'success':'failed';
     this.history.create({id:randomUUID(),userId,clientId,commandId,commandName:command.name,targetId:target.id,level,startedAt,endedAt:startedAt+result.durationMs,durationMs:result.durationMs,exitCode:result.exitCode,stdout:result.stdout,stderr:result.stderr,status});
-    return {ok:true,commandId,level,...result};
+    return {ok:true,commandId,level,exitCode:result.exitCode,stdout:result.stdout,stderr:result.stderr,durationMs:result.durationMs,...(result.signal?{signal:result.signal}:{})};
   }
 }

@@ -22,6 +22,20 @@ jobs:
       - run: npm test
       - run: npm run build
 
+  integrity-e2e:
+    # Real OpenSSH server + unprivileged target account + root-owned verifier (needs root: GitHub runners have passwordless sudo).
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install --package-lock-only --ignore-scripts
+      - run: npm ci
+      - run: sudo apt-get update && sudo apt-get install -y openssh-server
+      - run: sudo -E env "PATH=$PATH" npm run test:e2e
+
   security-checks:
     runs-on: ubuntu-latest
     needs: test

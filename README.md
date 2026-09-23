@@ -118,12 +118,24 @@ SSH credentials are split into two roles:
 - **Master keys** are provisioning credentials. They can be generated in the SSH page or uploaded by the human, with or without a passphrase. The private key is encrypted at rest; a passphrase is kept only in short-lived process memory after an explicit web-UI unlock.
 - **Command installations** are runtime capabilities. Farcmd generates a dedicated Ed25519 key for each installed command and encrypts the private half at rest.
 - The command's executable content is installed as a farcmd-managed script under `~/.ssh/farcmd/`. The filename is based on the MCP public hostname and command UUID, for example `~/.ssh/farcmd/mcp.example.com-<command-id>.sh`.
-- The authorized-key entry is forced to that exact script path with OpenSSH's `restrict,command="..."` mechanism. OpenSSH ignores the command supplied by the client for such a key, so the command key cannot be turned into a general shell capability. citeturn0search6turn0search0citeturn0search6turn0search0
+- The authorized-key entry is forced to that exact script path with OpenSSH's `restrict,command="..."` mechanism. OpenSSH ignores the command supplied by the client for such a key, so the command key cannot be turned into a general shell capability.
 - A command has two executable-content types: **shell command** (single line) and **Bash script** (multi-line). The installed capability points to the generated script rather than embedding the operation directly in `authorized_keys`.
-- MCP execution uses only the installed command key. The master key is never a runtime fallback.
+- MCP execution uses only the installed command key. The master key is never a runtime fallback, and it is not used for verification either.
 - If executable content or the target of an installed command changes, the existing capability must first be removed/replaced. If the master key is unavailable, the existing capability can still run, but replacement/removal is deferred.
 - Deleting a command or command capability is allowed even without a master key. If farcmd cannot remove the remote authorized-key entry and script immediately, it records the exact remote capability in a **remote capability ledger** for later cleanup.
 - When a master key becomes available again, the web UI can retry cleanup of pending/failed ledger entries.
 - Master-key deletion or replacement is intentionally allowed even while command capabilities exist. Existing command capabilities remain independent; deleting the master key simply removes provisioning/revocation authority until another master is configured.
 
 Per-command capability installation currently expects a POSIX/Linux-style target with the standard `base64` utility.
+
+### Capability integrity verification (levels 3–5)
+
+Immediately before a level 3, 4 or 5 command runs (after human approval or password confirmation for L4/L5), farcmd verifies that the remote capability is still exactly what it provisioned. Without a successful verification the command is **blocked**; there is no unverified fallback. Levels 1–2 keep their previous behaviour.
+
+- Each target gets its own **verification authority**: a verification SSH key forced (`restrict,command=…`) to a **root-owned verifier** through an argument-free sudoers rule, plus a 32-byte **HMAC secret** readable only by root on the target and stored encrypted in farcmd.
+- farcmd sends a fresh 256-bit nonce. The verifier measures the capability scripts, every `authorized_keys` entry sshd uses, and itself, and returns the measurement authenticated with `HMAC-SHA256(secret, measurement)`. A fake or modified verifier can't read the secret, so it can't claim "unchanged". An old response can't be replayed.
+- Verification uses no master key, so it keeps working after the master key is deleted. Provisioning, replacement and remote cleanup do not.
+- Install or repair the verifier on the SSH page: automatically (the master key needs root on the target via root or sudo), or with a one-time **manual root install script**, which works without any master key. Target requirements: `python3` and `sudo`.
+- The target account must not have unrestricted sudo/root: root on the target is outside what any on-host verifier can defend against.
+
+See [`docs/capability-integrity.md`](docs/capability-integrity.md) for the threat model, protocol, trust boundary, TOCTOU analysis and lifecycle. `sudo -E npm run test:e2e` runs the end-to-end tests against a real OpenSSH server.
