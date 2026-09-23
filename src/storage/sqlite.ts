@@ -14,7 +14,7 @@ export class SqliteAuthStore implements AuthStore, WebSessionStore {
       'CREATE TABLE IF NOT EXISTS authorization_codes (code TEXT PRIMARY KEY, client_id TEXT NOT NULL, redirect_uri TEXT NOT NULL, challenge TEXT NOT NULL, subject TEXT NOT NULL, scope TEXT NOT NULL, expires INTEGER NOT NULL);' +
       'CREATE TABLE IF NOT EXISTS refresh_tokens (token TEXT PRIMARY KEY, client_id TEXT NOT NULL, subject TEXT NOT NULL, scope TEXT NOT NULL, expires INTEGER NOT NULL);' +
       'CREATE TABLE IF NOT EXISTS web_sessions (token TEXT PRIMARY KEY, user_id TEXT NOT NULL, expires INTEGER NOT NULL);' +
-      'CREATE TABLE IF NOT EXISTS ssh_keys (id TEXT PRIMARY KEY,user_id TEXT NOT NULL,name TEXT NOT NULL,encrypted_private_key TEXT NOT NULL,fingerprint TEXT,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL);' +
+      'CREATE TABLE IF NOT EXISTS ssh_keys (id TEXT PRIMARY KEY,user_id TEXT NOT NULL,name TEXT NOT NULL,encrypted_private_key TEXT NOT NULL,fingerprint TEXT,public_key TEXT,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL);' +
       'CREATE TABLE IF NOT EXISTS ssh_targets (id TEXT PRIMARY KEY,user_id TEXT NOT NULL,name TEXT NOT NULL,hostname TEXT NOT NULL,port INTEGER NOT NULL,username TEXT NOT NULL,ssh_key_id TEXT NOT NULL,host_fingerprint TEXT,enabled INTEGER NOT NULL DEFAULT 1,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL);' +
       'CREATE TABLE IF NOT EXISTS commands (id TEXT PRIMARY KEY,user_id TEXT NOT NULL,target_id TEXT NOT NULL,name TEXT NOT NULL,description TEXT NOT NULL,shell_command TEXT NOT NULL,level INTEGER NOT NULL CHECK(level BETWEEN 1 AND 5),enabled INTEGER NOT NULL DEFAULT 1,execution_password_hash TEXT,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL);' +
       'CREATE TABLE IF NOT EXISTS oauth_grants (user_id TEXT NOT NULL,client_id TEXT NOT NULL,client_name TEXT NOT NULL,allowed_levels TEXT NOT NULL DEFAULT \'\',level5_permanently_denied INTEGER NOT NULL DEFAULT 0,visible_levels TEXT NOT NULL DEFAULT \'\',level5_permanently_hidden INTEGER NOT NULL DEFAULT 0,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL,revoked_at INTEGER,last_used_at INTEGER,PRIMARY KEY(user_id,client_id));' +
@@ -23,6 +23,7 @@ export class SqliteAuthStore implements AuthStore, WebSessionStore {
       'CREATE TABLE IF NOT EXISTS pending_executions (token TEXT PRIMARY KEY,user_id TEXT NOT NULL,client_id TEXT NOT NULL,command_id TEXT NOT NULL,level INTEGER NOT NULL,created_at INTEGER NOT NULL,expires_at INTEGER NOT NULL,status TEXT NOT NULL,exit_code INTEGER,stdout TEXT,stderr TEXT,duration_ms INTEGER,signal TEXT);' +
       'CREATE TABLE IF NOT EXISTS command_keys (id TEXT PRIMARY KEY,user_id TEXT NOT NULL,command_id TEXT NOT NULL,target_id TEXT NOT NULL,master_key_id TEXT NOT NULL,encrypted_private_key TEXT NOT NULL,public_key TEXT NOT NULL,fingerprint TEXT NOT NULL,installed_at INTEGER,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL,UNIQUE(user_id,command_id));'
     );
+    try{this.db.exec('ALTER TABLE ssh_keys ADD COLUMN public_key TEXT');}catch{}
     try{this.db.exec('ALTER TABLE commands ADD COLUMN execution_password_hash TEXT');}catch{}
     try{this.db.exec('ALTER TABLE pending_executions ADD COLUMN exit_code INTEGER');}catch{}
     try{this.db.exec('ALTER TABLE pending_executions ADD COLUMN stdout TEXT');}catch{}
