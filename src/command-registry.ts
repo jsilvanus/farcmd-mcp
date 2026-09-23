@@ -10,11 +10,11 @@ export interface CommandRecord {
 
 export class SqliteCommandStore {
   constructor(private readonly db:DatabaseSync){}
-  list(userId:string):CommandRecord[]{const rows=this.db.prepare('SELECT id,user_id,target_id,name,description,shell_command,level,enabled,created_at,updated_at FROM commands WHERE user_id=? ORDER BY name,id').all(userId) as any[];return rows.map(this.map);}
+  list(userId:string):CommandRecord[]{const rows=this.db.prepare('SELECT id,user_id,target_id,name,description,shell_command,level,enabled,created_at,updated_at FROM commands WHERE user_id=? ORDER BY name,id').all(userId) as any[];return rows.map(this.map).filter((c):c is CommandRecord=>c!==undefined);}
   get(userId:string,id:string):CommandRecord|undefined{return this.map(this.db.prepare('SELECT id,user_id,target_id,name,description,shell_command,level,enabled,created_at,updated_at FROM commands WHERE user_id=? AND id=?').get(userId,id) as any);}
   create(r:CommandRecord):void{this.db.prepare('INSERT INTO commands (id,user_id,target_id,name,description,shell_command,level,enabled,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)').run(r.id,r.userId,r.targetId,r.name,r.description,r.shellCommand,r.level,r.enabled?1:0,r.createdAt,r.updatedAt);}
   update(r:CommandRecord):void{this.db.prepare('UPDATE commands SET target_id=?,name=?,description=?,shell_command=?,level=?,enabled=?,updated_at=? WHERE user_id=? AND id=?').run(r.targetId,r.name,r.description,r.shellCommand,r.level,r.enabled?1:0,r.updatedAt,r.userId,r.id);}
-  delete(userId:string,id:string):void{this.db.prepare('DELETE FROM commands WHERE user_id=? AND id=?').run(userId,id);}
+  delete(userId:string,id:string):void{this.db.prepare('DELETE FROM command_keys WHERE user_id=? AND command_id=?').run(userId,id);this.db.prepare('DELETE FROM commands WHERE user_id=? AND id=?').run(userId,id);}
   hasExecutionPassword(userId:string,id:string):boolean{const r=this.db.prepare('SELECT execution_password_hash FROM commands WHERE user_id=? AND id=?').get(userId,id) as any;return typeof r?.execution_password_hash==='string'&&r.execution_password_hash.length>0;}
   clearExecutionPassword(userId:string,id:string):void{this.db.prepare('UPDATE commands SET execution_password_hash=NULL,updated_at=? WHERE user_id=? AND id=?').run(Date.now(),userId,id);}
   setExecutionPassword(userId:string,id:string,passwordHash:string):void{const result=this.db.prepare('UPDATE commands SET execution_password_hash=?,updated_at=? WHERE user_id=? AND id=? AND level=5').run(passwordHash,Date.now(),userId,id);if(Number(result.changes)!==1)throw new Error('Level 5 command not found.');}
