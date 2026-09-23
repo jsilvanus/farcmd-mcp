@@ -46,6 +46,6 @@ if(process.env.NODE_ENV==='production')await app.register(fastifyStatic,{root:fi
 await mountOAuthMetadata(app,publicUrl);
 await mountAuthorizationServer(app,publicUrl,publicUrl+'/mcp',secret,store,users);
 await mountMcpHttp(app,{connector:new FarcmdConnectorImpl(store.getDatabase(),publicUrl),publicUrl,jwtSecret:secret,resource:publicUrl+'/mcp',isUserActive:id=>isActiveUser(users.getUser(id))});
-app.get('/health',async()=>({ok:true}));
+app.get('/health',{logLevel:'silent'},async()=>({ok:true}));
 app.get('/',async(_request,reply)=>{if(process.env.NODE_ENV==='production')return reply.sendFile('index.html');return {name:'farcmd-mcp',version:'0.2.0',mcp:'/mcp',web:'/'};});
 await app.listen({host:process.env.HOST??'0.0.0.0',port});
