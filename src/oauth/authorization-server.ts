@@ -49,7 +49,7 @@ export async function mountAuthorizationServer(app:FastifyInstance,issuer:string
   authStore.upsertOAuthGrant(user.id,q.client_id!,metadata.client_name,allowed,permanent5||!!existing?.level5PermanentlyHidden);
   authStore.recordSecurityEvent?.(user.id,q.client_id,'oauth.authorize',{clientName:metadata.client_name,decision:'approved',visibleLevels:allowed,level5PermanentlyHidden:permanent5||!!existing?.level5PermanentlyHidden,previousVisibleLevels:existing?.visibleLevels??null});
   const code=randomToken();authStore.oauthTokens().saveAuthorizationCode(code,{clientId:q.client_id!,redirectUri:q.redirect_uri!,challenge:q.code_challenge!,subject:user.id,scope:q.scope??'mcp',expires:Date.now()+60_000});
-  target.searchParams.set('code',code);return reply.redirect(target.toString());
+  target.searchParams.set('code',code);\n  request.log.info({event:'oauth.authorization_redirect',clientId:q.client_id,redirectUri:q.redirect_uri,hasState:Boolean(q.state),issuer,hasCode:true},'OAuth authorization redirect');\n  return reply.redirect(target.toString());
  });
  app.post('/oauth/token',async(request,reply)=>{
   const b=request.body as Record<string,string|undefined>;
