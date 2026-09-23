@@ -5,6 +5,7 @@ import { getSshPassphrase } from './ssh-key-cache.js';
 import { executeSshCommand, inspectPrivateKey } from './ssh.js';
 import { SqliteSshStore } from './storage/ssh.js';
 import { SqliteCommandStore, type CommandLevel } from './command-registry.js';
+import { SqliteCommandKeyStore } from './storage/command-keys.js';
 import { SqliteOAuthGrantStore } from './oauth/grants.js';
 import { SqliteExecutionStore, confirmationForLevel, type ConfirmationRequirement } from './execution.js';
 import { randomToken } from './oauth/pkce.js';
@@ -23,12 +24,11 @@ export interface FarcmdConnector {
 }
 
 export class FarcmdConnectorImpl implements FarcmdConnector {
-  private readonly ssh:SqliteSshStore; private readonly commands:SqliteCommandStore; private readonly grants:SqliteOAuthGrantStore; private readonly pending:SqliteExecutionStore;  private readonly history:SqliteExecutionHistoryStore;
+  private readonly ssh:SqliteSshStore; private readonly commands:SqliteCommandStore; private readonly grants:SqliteOAuthGrantStore; private readonly pending:SqliteExecutionStore;  private readonly history:SqliteExecutionHistoryStore; private readonly commandKeys:SqliteCommandKeyStore;
   constructor(private readonly db:DatabaseSync,private readonly publicUrl:string){
-    this.ssh=new SqliteSshStore(db); this.commands=new SqliteCommandStore(db); this.grants=new SqliteOAuthGrantStore(db); this.pending=new SqliteExecutionStore(db); this.pending.cleanup(); this.history=new SqliteExecutionHistoryStore(db);
+    this.ssh=new SqliteSshStore(db); this.commands=new SqliteCommandStore(db); this.grants=new SqliteOAuthGrantStore(db); this.pending=new SqliteExecutionStore(db); this.pending.cleanup(); this.history=new SqliteExecutionHistoryStore(db); this.commandKeys=new SqliteCommandKeyStore(db);
   }
   async health(_context:ConnectorContext):Promise<{ok:true}>{return {ok:true};}
-  visibleLevels(context:ConnectorContext):CommandLevel[]{const grant=this.grants.get(context.userId,context.clientId);return grant&&!grant.revokedAt?[...grant.visibleLevels]:[];}
   visibleLevels(context:ConnectorContext):CommandLevel[]{const grant=this.grants.get(context.userId,context.clientId);return grant&&!grant.revokedAt?[...grant.visibleLevels]:[];}
   async listCommands(context:ConnectorContext):Promise<CommandSummary[]>{
     const grant=this.grants.get(context.userId,context.clientId);
@@ -72,13 +72,20 @@ export class FarcmdConnectorImpl implements FarcmdConnector {
     const command=this.commands.get(userId,commandId); if(!command||!command.enabled||command.level!==level)throw new Error('Command is no longer available.');
     const target=this.ssh.getTarget(userId,command.targetId); if(!target||!target.enabled)throw new Error('SSH target is unavailable.');
     if(!target.hostFingerprint)throw new Error('SSH target has no pinned host fingerprint.');
-    const key=this.ssh.getKey(userId,target.sshKeyId); if(!key)throw new Error('SSH key not found.');
-    const privateKey=decryptSecret(key.encryptedPrivateKey,'ssh-key:'+userId+':'+key.id);
-    const passphrase=getSshPassphrase(userId,key.id);
-    const inspected=await inspectPrivateKey(privateKey,passphrase);
-    if(!inspected.valid){
-      if(inspected.encrypted&&!passphrase)throw new Error('SSH key is locked. Unlock it in the farcmd web UI.');
-      throw new Error('Stored SSH key is invalid or the unlock passphrase is incorrect.');
+    const commandKey=this.commandKeys.get(userId,commandId);
+    let privateKey:string;
+    let passphrase:string|undefined;
+    if(commandKey?.installedAt){
+      privateKey=decryptSecret(commandKey.encryptedPrivateKey,'command-key:'+userId+':'+commandKey.id);
+    } else {
+      const key=this.ssh.getKey(userId,target.sshKeyId); if(!key)throw new Error('SSH master key not found.');
+      privateKey=decryptSecret(key.encryptedPrivateKey,'ssh-key:'+userId+':'+key.id);
+      passphrase=getSshPassphrase(userId,key.id);
+      const inspected=await inspectPrivateKey(privateKey,passphrase);
+      if(!inspected.valid){
+        if(inspected.encrypted&&!passphrase)throw new Error('SSH master key is locked. Unlock it in the farcmd web UI.');
+        throw new Error('Stored SSH master key is invalid or the unlock passphrase is incorrect.');
+      }
     }
     const startedAt=Date.now();
     const result=await executeSshCommand({hostname:target.hostname,port:target.port,username:target.username,hostFingerprint:target.hostFingerprint},{privateKey,...(passphrase!==undefined?{passphrase}:{})},command.shellCommand);
