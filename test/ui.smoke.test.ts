@@ -55,6 +55,7 @@ test('web UI: sign in, visit every page, toggle MCP access, sign out',{skip:!exi
     assert.equal(new McpAccessPolicy(db).status(user.id).effective,true);
     // SSH and Commands: lists with row actions; adding and editing happen in dialogs.
     await page.getByRole('link',{name:'SSH',exact:true}).click();
+    await page.getByRole('heading',{name:'Remote cleanup ledger'}).waitFor(); // lives on the SSH page
     await page.getByRole('button',{name:'Generate key'}).click();
     const dialog=page.locator('dialog.modal');
     await dialog.getByLabel('Name',{exact:true}).fill('ops-master'); await dialog.getByRole('button',{name:'Generate'}).click();

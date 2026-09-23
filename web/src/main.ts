@@ -109,6 +109,9 @@ function sshKeyOptions(keys:any[], selected?:string){return keys.map(k=>'<option
 async function sshPage() {
   const [keysResult, targetsResult] = await Promise.all([api('/api/ssh/keys'),api('/api/ssh/targets')]);
   const keys=keysResult.keys as any[]; const targets=targetsResult.targets as any[];
+  const ledger=(await Promise.all(targets.map(t=>api('/api/ssh/targets/'+t.id+'/capability-ledger')))).flatMap((r:any)=>r.entries as any[]);
+  const ledgerTargets=targets.filter(t=>ledger.some(x=>x.targetId===t.id));
+  const targetName=(id:string)=>targets.find(t=>t.id===id)?.name??id;
   const keyRows=keys.map(k=>row(
     '<strong>'+escapeHtml(k.name)+'</strong><small class="mono">'+escapeHtml(k.fingerprint??'fingerprint pending')+'</small><div class="pills">'+(k.passphraseRequired?pill(k.locked?'Locked':'Unlocked',k.locked?'warn':'ok')+pill('Passphrase protected'):pill('No passphrase'))+'</div>',
     (k.publicKey?'<button class="small" data-copy-public="'+k.id+'">Copy public key</button>':'')+
@@ -124,7 +127,10 @@ async function sshPage() {
     '<p class="hint">A master key is provisioning authority only: it installs, replaces and removes capabilities and installs verifiers. Passphrases are never stored. Deleting a master key keeps existing capabilities executable; level 3–5 commands keep running as long as the target\'s integrity verifier confirms them.</p>'+
     rows(keyRows,'No master keys yet. Generate one, or upload an existing private key.')+'</article>'+
     '<article>'+sectionHead('Targets','<button class="small primary" id="add-target"'+(keys.length?'':' disabled title="Add a master key first"')+'>Add target</button>')+
-    rows(targetRows,keys.length?'No targets yet.':'Add a master key before adding targets.')+'</article>');
+    rows(targetRows,keys.length?'No targets yet.':'Add a master key before adding targets.')+'</article>'+
+    '<article>'+sectionHead('Remote cleanup ledger',ledgerTargets.map(t=>'<button class="small" data-cleanup-target="'+t.id+'">Retry '+escapeHtml(t.name)+'</button>').join(''))+
+    '<p class="hint">Command capabilities that remain on targets because farcmd had no provisioning authority when they were removed. Retry removes them with the target\'s master key.</p>'+
+    rows(ledger.map(x=>row('<strong class="mono">'+escapeHtml(x.remoteScriptPath)+'</strong><small>'+escapeHtml(targetName(x.targetId))+' · '+escapeHtml(x.status)+' · attempts '+x.attemptCount+(x.lastError?' · '+escapeHtml(x.lastError):'')+'</small>','')),'No pending remote cleanup.')+'</article>');
 
   on('#generate-key',()=>formDialog('Generate master key','<label>Name<input name="name" required maxlength="120"></label><label>Passphrase (optional)<input name="passphrase" type="password" autocomplete="new-password"></label><p class="hint">farcmd generates an Ed25519 key. Add its public key to the targets\' authorized_keys.</p>','Generate',async form=>{
     const f=new FormData(form); await api('/api/ssh/keys/generate',{method:'POST',body:JSON.stringify({name:f.get('name'),passphrase:f.get('passphrase')})}); sshPage();}));
@@ -151,6 +157,7 @@ async function sshPage() {
   on('[data-delete-target]',async b=>{if(confirm('Delete this target?')){try{await api('/api/ssh/targets/'+b.dataset.deleteTarget,{method:'DELETE'});}catch(err){alert((err as Error).message);} sshPage();}});
   on('[data-test]',async b=>{const el=b as HTMLButtonElement;el.disabled=true;try{const result=await api('/api/ssh/targets/'+b.dataset.test+'/test',{method:'POST'});if(result.ok){alert('Connection successful. Host fingerprint: '+(result.fingerprint??'unknown'));}else if(result.fingerprint&&confirm((result.error??'Host key is not yet trusted.')+'\n\nFingerprint: '+result.fingerprint+'\n\nTrust this fingerprint for this target?')){await api('/api/ssh/targets/'+b.dataset.test,{method:'PATCH',body:JSON.stringify({hostFingerprint:result.fingerprint})});alert('Fingerprint saved. Run Test again to verify the connection.');sshPage();}else{alert(result.error??'Connection failed');}}catch(err){alert((err as Error).message);}finally{el.disabled=false;}});
   on('[data-verifier]',b=>{const t=targets.find(x=>x.id===b.dataset.verifier); if(t)verifierDialog(t,keys);});
+  on('[data-cleanup-target]',async b=>{try{const r=await api('/api/ssh/targets/'+b.dataset.cleanupTarget+'/capability-ledger/cleanup',{method:'POST',body:'{}'});alert('Removed '+r.removed+' remote capabilities; '+r.remaining+' remain.');sshPage();}catch(err){alert((err as Error).message);}});
 }
 /** Integrity verifier status and actions for one target. */
 function verifierDialog(t:any, keys:any[]){
@@ -202,7 +209,6 @@ function unlockPage(keyId:string) {
 async function commandsPage(){
   const [cr,tr]=await Promise.all([api('/api/commands'),api('/api/ssh/targets')]);
   const cs=cr.commands as any[],ts=tr.targets as any[];
-  const ledger=(await Promise.all(ts.map(t=>api('/api/ssh/targets/'+t.id+'/capability-ledger')))).flatMap((r:any)=>r.entries as any[]);
   const targetName=(id:string)=>ts.find(t=>t.id===id)?.name??'unknown target';
   const commandRows=cs.map(c=>row(
     '<strong>'+escapeHtml(c.name)+'</strong>'+(c.description?'<small>'+escapeHtml(c.description)+'</small>':'')+
@@ -215,14 +221,10 @@ async function commandsPage(){
     (c.level===5?'<button class="small" data-set-level5="'+c.id+'">Password</button>':'')+
     (c.commandKey?'<button class="small" data-delete-command-key="'+c.id+'">Uninstall</button>':'<button class="small" data-create-command-key="'+c.id+'">Install</button>')+
     '<button class="small" data-toggle-command="'+c.id+'">'+(c.enabled?'Disable':'Enable')+'</button><button class="small danger" data-delete-command="'+c.id+'">Delete</button>'));
-  const ledgerTargets=ts.filter(t=>ledger.some(x=>x.targetId===t.id));
   shell('Commands','<div id="mcp-access"></div>'+
     '<article>'+sectionHead('Command registry','<button class="small primary" id="new-command"'+(ts.length?'':' disabled title="Add an SSH target first"')+'>New command</button>')+
     '<p class="hint">A command is an MCP capability. Install creates a dedicated SSH key on the target that can only run this command’s farcmd-managed script.</p>'+
-    rows(commandRows,ts.length?'No commands yet.':'Add an SSH target before creating commands.')+'</article>'+
-    '<article>'+sectionHead('Remote cleanup ledger',ledgerTargets.map(t=>'<button class="small" data-cleanup-target="'+t.id+'">Retry '+escapeHtml(t.name)+'</button>').join(''))+
-    '<p class="hint">Capabilities that remain on targets because farcmd had no provisioning authority when they were removed here.</p>'+
-    rows(ledger.map(x=>row('<strong class="mono">'+escapeHtml(x.remoteScriptPath)+'</strong><small>'+escapeHtml(targetName(x.targetId))+' · '+escapeHtml(x.status)+' · attempts '+x.attemptCount+(x.lastError?' · '+escapeHtml(x.lastError):'')+'</small>','')),'No pending remote cleanup.')+'</article>');
+    rows(commandRows,ts.length?'No commands yet.':'Add an SSH target before creating commands.')+'</article>');
 
   // Content, type and target cannot change while a capability is installed (the server refuses with 409).
   const commandFields=(c?:any)=>{const locked=!!c?.commandKey; const dis=locked?' disabled':'';
@@ -252,7 +254,6 @@ async function commandsPage(){
   on('[data-delete-command-key]',async b=>{if(!confirm('Remove this SSH capability remotely? If no master key is available, farcmd will record it for later cleanup.'))return;try{const r=await api('/api/commands/'+b.dataset.deleteCommandKey+'/key',{method:'DELETE'});if(r.remoteCleanupPending)alert('Capability removed locally and recorded for remote cleanup when a master key is available.');commandsPage();}catch(err){alert((err as Error).message);}});
   on('[data-toggle-command]',async b=>{const x=cs.find(v=>v.id===b.dataset.toggleCommand);if(x)await api('/api/commands/'+x.id,{method:'PATCH',body:JSON.stringify({enabled:!x.enabled})});commandsPage();});
   on('[data-delete-command]',async b=>{if(confirm('Delete this command? If its SSH capability cannot currently be removed, farcmd will record it for later cleanup.')){const r=await api('/api/commands/'+b.dataset.deleteCommand,{method:'DELETE'});if(r.remoteCleanupPending)alert('The command was deleted locally and its remote capability was recorded for later cleanup.');commandsPage();}});
-  on('[data-cleanup-target]',async b=>{try{const r=await api('/api/ssh/targets/'+b.dataset.cleanupTarget+'/capability-ledger/cleanup',{method:'POST',body:'{}'});alert('Removed '+r.removed+' remote capabilities; '+r.remaining+' remain.');commandsPage();}catch(err){alert((err as Error).message);}});
 }
 async function oauthPage(){const r=await api('/api/oauth/grants');const grants=r.grants as any[];shell('OAuth Sources','<div id="mcp-access"></div><p>Each OAuth source controls which command levels are shown to the MCP client. Tool allow/ask/deny remains the MCP client\'s decision; levels 4 and 5 add farcmd human confirmation.</p>'+grants.map(g=>'<article class="item"><strong>'+escapeHtml(g.clientName||g.clientId)+'</strong><small>'+escapeHtml(g.clientId)+'</small><small>'+ (g.revoked?'Revoked':'Active') + (g.lastUsedAt?' · Last used '+new Date(g.lastUsedAt).toLocaleString():'') +'</small>'+(g.revoked?'':'<form data-oauth-form="'+escapeHtml(g.clientId)+'"><label><input type="checkbox" name="level" value="1" '+(g.visibleLevels.includes(1)?'checked':'')+'> Level 1 — Safe/read-only</label><label><input type="checkbox" name="level" value="2" '+(g.visibleLevels.includes(2)?'checked':'')+'> Level 2 — Low-impact</label><label><input type="checkbox" name="level" value="3" '+(g.visibleLevels.includes(3)?'checked':'')+'> Level 3 — Normal mutating</label><label><input type="checkbox" name="level" value="4" '+(g.visibleLevels.includes(4)?'checked':'')+'> Level 4 — High-impact</label><label><input type="checkbox" name="level" value="5" '+(g.visibleLevels.includes(5)?'checked':'')+(g.level5PermanentlyHidden?' disabled':'')+'> Level 5 — Dangerous/destructive</label><label><input type="checkbox" name="permanentLevel5" '+(g.level5PermanentlyHidden?'checked disabled':'')+'> Permanently hide level 5</label><button>Save permissions</button></form><button data-revoke-oauth="'+escapeHtml(g.clientId)+'">Revoke</button>')+'</article>').join(''));document.querySelectorAll<HTMLFormElement>('[data-oauth-form]').forEach(f=>f.onsubmit=async e=>{e.preventDefault();const levels=[...f.querySelectorAll<HTMLInputElement>('input[name="level"]:checked')].map(x=>Number(x.value));try{await api('/api/oauth/grants/'+encodeURIComponent(f.dataset.oauthForm!),{method:'PATCH',body:JSON.stringify({visibleLevels:levels,level5PermanentlyHidden:(f.querySelector<HTMLInputElement>('input[name="permanentLevel5"]')?.checked??false)})});oauthPage();}catch(err){alert((err as Error).message);}});document.querySelectorAll<HTMLElement>('[data-revoke-oauth]').forEach(b=>b.onclick=async()=>{if(confirm('Revoke this OAuth source?')){await api('/api/oauth/grants/'+encodeURIComponent(b.dataset.revokeOauth!)+'/revoke',{method:'POST'});oauthPage();}});mcpAccessPanel();}
 async function auditPage(filters:{event?:string;outcome?:string;search?:string}={}){
