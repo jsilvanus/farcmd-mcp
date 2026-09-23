@@ -2,9 +2,9 @@ import type { DatabaseSync } from 'node:sqlite';
 import { randomUUID } from 'node:crypto';
 import { decryptSecret } from './crypto-at-rest.js';
 import { getSshPassphrase } from './ssh-key-cache.js';
-import { executeSshCommand, inspectPrivateKey } from './ssh.js';
+import { executeSshCommand, inspectPrivateKey, verifyCommandCapabilityIntegrity } from './ssh.js';
 import { SqliteSshStore } from './storage/ssh.js';
-import { SqliteCommandStore, type CommandLevel } from './command-registry.js';
+import { SqliteCommandStore, type CommandLevel, hashCommandContent } from './command-registry.js';
 import { SqliteCommandInstallationStore } from './storage/command-installations.js';
 import { SqliteOAuthGrantStore } from './oauth/grants.js';
 import { SqliteExecutionStore, confirmationForLevel, type ConfirmationRequirement } from './execution.js';
@@ -74,6 +74,20 @@ export class FarcmdConnectorImpl implements FarcmdConnector {
     if(!target.hostFingerprint)throw new Error('SSH target has no pinned host fingerprint.');
     const installation=this.installations.get(userId,commandId);
     if(!installation?.installedAt)throw new Error('This command has no installed SSH capability.');
+    const expectedCommandHash=hashCommandContent(command.type,command.content);
+    if(!installation.commandSha256||installation.commandSha256!==expectedCommandHash)throw new Error('Command capability integrity check failed: stored command definition does not match the installed capability.');
+    if(level>=3){
+      const master=this.ssh.getKey(userId,installation.masterKeyId);
+      if(!master)throw new Error('Command integrity verification requires the provisioning master key, which is no longer available.');
+      let masterPrivateKey:string;
+      try{masterPrivateKey=decryptSecret(master.encryptedPrivateKey,'ssh-key:'+userId+':'+master.id);}catch{throw new Error('Unable to decrypt the provisioning master key for integrity verification.');}
+      const masterPassphrase=getSshPassphrase(userId,master.id);
+      const inspected=inspectPrivateKey(masterPrivateKey,masterPassphrase);
+      if(!inspected.valid)throw new Error(inspected.encrypted&&!masterPassphrase?'Provisioning master key is locked; unlock it before executing this command.':'Provisioning master key is invalid.');
+      if(!installation.scriptSha256||!installation.authorizedKeySha256)throw new Error('This command capability has no integrity baseline; recreate the capability before executing it.');
+      const integrity=await verifyCommandCapabilityIntegrity({hostname:target.hostname,port:target.port,username:target.username,hostFingerprint:target.hostFingerprint},{privateKey:masterPrivateKey,...(masterPassphrase!==undefined?{passphrase:masterPassphrase}: {})},installation.remoteScriptPath,installation.authorizedKeyLine,installation.scriptSha256,installation.authorizedKeySha256);
+      if(!integrity.ok)throw new Error('Command capability integrity check failed: the remote script or authorized_keys entry has changed.');
+    }
     const privateKey=decryptSecret(installation.encryptedPrivateKey,'command-installation:'+userId+':'+installation.id);
     const startedAt=Date.now();
     const result=await executeSshCommand({hostname:target.hostname,port:target.port,username:target.username,hostFingerprint:target.hostFingerprint},{privateKey},'true');
