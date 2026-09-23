@@ -1,0 +1,33 @@
+# farcmd-mcp behind an existing Traefik (see docs/deployment.md for details).
+#
+#   cp .env.example .env    # fill in secrets, MCP_PUBLIC_URL, FARCMD_TRUST_PROXY
+#   docker compose -f docker-compose.traefik.yml up -d
+#   docker compose -f docker-compose.traefik.yml exec farcmd farcmd-admin user create --email you@example.org --name "You"
+services:
+  farcmd:
+    build: .
+    image: farcmd-mcp:latest
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      STORAGE_PATH: /data/app.sqlite
+    volumes:
+      - farcmd-data:/data
+    networks: [proxy]
+    # No published port: only Traefik reaches the app, so FARCMD_TRUST_PROXY can safely trust
+    # the proxy network (e.g. the subnet of the "proxy" network).
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: proxy
+      traefik.http.routers.farcmd.rule: Host(`farcmd.example.org`)
+      traefik.http.routers.farcmd.entrypoints: websecure
+      traefik.http.routers.farcmd.tls.certresolver: letsencrypt
+      traefik.http.services.farcmd.loadbalancer.server.port: "5999"
+
+volumes:
+  farcmd-data:
+
+networks:
+  proxy:
+    external: true

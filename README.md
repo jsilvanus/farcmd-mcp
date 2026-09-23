@@ -22,7 +22,7 @@ Implemented:
 
 ## Deployment
 
-Production runs behind a TLS-terminating reverse proxy (Traefik or nginx). See [`docs/deployment.md`](docs/deployment.md) for the Docker image and `docker-compose.yml`, the nginx example in `deploy/nginx/`, `FARCMD_TRUST_PROXY`, the environment reference, and backup, restore and upgrades.
+Production runs behind a TLS-terminating reverse proxy (Traefik or nginx). See [`docs/deployment.md`](docs/deployment.md) for the Docker image, `docker-compose.yml` (loopback port for nginx) and `docker-compose.traefik.yml`, the nginx example in `deploy/nginx/`, `FARCMD_TRUST_PROXY`, the environment reference, and backup, restore and upgrades.
 
 ## Development
 

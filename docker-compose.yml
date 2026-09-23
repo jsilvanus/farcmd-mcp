@@ -1,4 +1,5 @@
-# farcmd-mcp behind an existing Traefik (see docs/deployment.md for nginx and details).
+# farcmd-mcp behind a reverse proxy on the host, e.g. nginx (see deploy/nginx/farcmd.conf and
+# docs/deployment.md). For Traefik, use docker-compose.traefik.yml instead.
 #
 #   cp .env.example .env    # fill in secrets, MCP_PUBLIC_URL, FARCMD_TRUST_PROXY
 #   docker compose up -d
@@ -11,23 +12,17 @@ services:
     env_file: .env
     environment:
       NODE_ENV: production
+      PORT: "5999"
       STORAGE_PATH: /data/app.sqlite
     volumes:
       - farcmd-data:/data
-    networks: [proxy]
-    # No published port: only Traefik reaches the app, so FARCMD_TRUST_PROXY can safely trust
-    # the proxy network (e.g. the subnet of the "proxy" network).
-    labels:
-      traefik.enable: "true"
-      traefik.docker.network: proxy
-      traefik.http.routers.farcmd.rule: Host(`farcmd.example.org`)
-      traefik.http.routers.farcmd.entrypoints: websecure
-      traefik.http.routers.farcmd.tls.certresolver: letsencrypt
-      traefik.http.services.farcmd.loadbalancer.server.port: "5999"
+    # Published on loopback only, so the app is reachable solely through the host's reverse proxy.
+    # Override the host port with FARCMD_HOST_PORT in .env (and match proxy_pass in nginx).
+    # Connections arrive from this compose network's gateway, not 127.0.0.1, so set
+    # FARCMD_TRUST_PROXY to that address:
+    #   docker network inspect <project>_default -f '{{(index .IPAM.Config 0).Gateway}}'
+    ports:
+      - "127.0.0.1:${FARCMD_HOST_PORT:-5999}:5999"
 
 volumes:
   farcmd-data:
-
-networks:
-  proxy:
-    external: true
