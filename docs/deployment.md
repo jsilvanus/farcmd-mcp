@@ -43,13 +43,34 @@ docker compose up -d --build
 docker compose exec farcmd farcmd-admin user create --email you@example.org --name "You"
 ```
 
+`docker-compose.yml` is for a reverse proxy on the host such as nginx; `docker-compose.traefik.yml`
+is for an existing Traefik (see below).
+
 The image runs as the unprivileged `node` user, keeps all state in the `/data` volume, has a
 `HEALTHCHECK` on `/health`, and puts `farcmd-admin` on `PATH`. Registration is off by default:
 accounts are created with `farcmd-admin` (see the README).
 
+### Behind nginx
+
+`docker-compose.yml` publishes the app on loopback only (`127.0.0.1:5999`; change the host port with
+`FARCMD_HOST_PORT` in `.env`), so only a reverse proxy on the host can reach it. Use
+`deploy/nginx/farcmd.conf` (TLS, HTTP→HTTPS redirect, forwarded headers, and
+`proxy_buffering off` + long timeouts for MCP streams); its `proxy_pass` must match the host port.
+
+With a published port, connections reach the container from the compose network's gateway, not
+from 127.0.0.1, so trust that address:
+
+```sh
+docker network inspect <project>_default -f '{{(index .IPAM.Config 0).Gateway}}'   # e.g. 172.18.0.1
+# .env
+FARCMD_TRUST_PROXY=172.18.0.1
+```
+
+When running node directly on the host, use `127.0.0.1`.
+
 ### Behind Traefik
 
-`docker-compose.yml` assumes an existing Traefik attached to an external Docker network named
+`docker-compose.traefik.yml` assumes an existing Traefik attached to an external Docker network named
 `proxy`, an entrypoint `websecure` and a certificate resolver `letsencrypt`; adjust the labels
 (`Host(...)`, resolver name) to your setup. The service publishes **no port**, so only Traefik can
 reach it, and `FARCMD_TRUST_PROXY` can name the proxy network:
@@ -60,25 +81,8 @@ docker network inspect proxy -f '{{(index .IPAM.Config 0).Subnet}}'   # e.g. 172
 FARCMD_TRUST_PROXY=172.20.0.0/16
 ```
 
-Traefik streams responses by default, so MCP's server-sent events need no extra configuration.
-
-### Behind nginx
-
-Use `deploy/nginx/farcmd.conf` (TLS, HTTP→HTTPS redirect, forwarded headers, and
-`proxy_buffering off` + long timeouts for MCP streams). Publish the app on loopback only:
-
-```yaml
-# docker-compose.override.yml
-services:
-  farcmd:
-    ports: ["127.0.0.1:5999:5999"]
-    networks: !reset []
-    labels: !reset {}
-```
-
-With a published port, connections reach the container from the Docker bridge gateway, not from
-127.0.0.1, so trust that address: `docker network inspect <network> -f '{{(index .IPAM.Config 0).Gateway}}'`
-(e.g. `FARCMD_TRUST_PROXY=172.17.0.1`). When running node directly on the host, use `127.0.0.1`.
+Run it with `docker compose -f docker-compose.traefik.yml ...` (or set
+`COMPOSE_FILE=docker-compose.traefik.yml` in `.env`). Traefik streams responses by default, so MCP's server-sent events need no extra configuration.
 
 Never set `FARCMD_TRUST_PROXY=true` if the app port is reachable other than through the proxy:
 anyone could then forge their client IP.
