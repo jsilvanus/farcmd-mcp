@@ -98,7 +98,7 @@ export async function mountWebApi(app:FastifyInstance, users:UserStore, sessionS
     catch { return reply.code(400).send({error:'Invalid SSH key or passphrase'}); }
   });
   app.post('/api/ssh/keys/:id/lock',async (request,reply)=>{ const user=await requireUser(request,reply,users,sessions); if(!user)return; lockSshKey(user.id,(request.params as {id:string}).id); return {ok:true}; });
-  app.delete('/api/ssh/keys/:id',async (request,reply)=>{ const user=await requireUser(request,reply,users,sessions); if(!user)return; const id=(request.params as {id:string}).id; if(!ssh.getKey(user.id,id))return reply.code(404).send({error:'SSH key not found'}); lockSshKey(user.id,id); ssh.deleteKey(user.id,id); return {ok:true}; });
+  app.delete('/api/ssh/keys/:id',async (request,reply)=>{ const user=await requireUser(request,reply,users,sessions); if(!user)return; const id=(request.params as {id:string}).id; if(!ssh.getKey(user.id,id))return reply.code(404).send({error:'SSH key not found'}); if(ssh.listTargets(user.id).some(t=>t.sshKeyId===id))return reply.code(409).send({error:'This master key is assigned to an SSH target. Change the target to another master key before deleting it.'}); lockSshKey(user.id,id); ssh.deleteKey(user.id,id); return {ok:true}; });
   app.get('/api/ssh/targets',async (request,reply)=>{ const user=await requireUser(request,reply,users,sessions); if(!user)return; return {targets:ssh.listTargets(user.id)}; });
   app.post('/api/ssh/targets',async (request,reply)=>{
     const user=await requireUser(request,reply,users,sessions); if(!user)return; const b=request.body as Record<string,unknown>;
