@@ -29,7 +29,7 @@ export class SqliteSshStore {
 
   listKeys(userId: string): SshKeyRecord[] {
     const rows = this.db.prepare('SELECT id,user_id,name,encrypted_private_key,fingerprint,created_at,updated_at FROM ssh_keys WHERE user_id=? ORDER BY name,id').all(userId) as Array<any>;
-    return rows.map(this.mapKey);
+    return rows.map(this.mapKey).filter((k):k is SshKeyRecord=>k!==undefined);
   }
 
   getKey(userId: string, id: string): SshKeyRecord | undefined {
@@ -50,7 +50,7 @@ export class SqliteSshStore {
 
   listTargets(userId: string): SshTargetRecord[] {
     const rows = this.db.prepare('SELECT id,user_id,name,hostname,port,username,ssh_key_id,host_fingerprint,enabled,created_at,updated_at FROM ssh_targets WHERE user_id=? ORDER BY name,id').all(userId) as Array<any>;
-    return rows.map(this.mapTarget);
+    return rows.map(this.mapTarget).filter((t):t is SshTargetRecord=>t!==undefined);
   }
 
   getTarget(userId: string, id: string): SshTargetRecord | undefined {
@@ -69,12 +69,12 @@ export class SqliteSshStore {
     this.db.prepare('DELETE FROM ssh_targets WHERE user_id=? AND id=?').run(userId,id);
   }
 
-  private mapKey = (row:any): SshKeyRecord => row ? {
+  private mapKey = (row:any): SshKeyRecord|undefined => row ? {
     id:row.id,userId:row.user_id,name:row.name,encryptedPrivateKey:row.encrypted_private_key,
     ...(row.fingerprint ? {fingerprint:row.fingerprint} : {}),createdAt:row.created_at,updatedAt:row.updated_at
   } : undefined;
 
-  private mapTarget = (row:any): SshTargetRecord => row ? {
+  private mapTarget = (row:any): SshTargetRecord|undefined => row ? {
     id:row.id,userId:row.user_id,name:row.name,hostname:row.hostname,port:row.port,username:row.username,
     sshKeyId:row.ssh_key_id,...(row.host_fingerprint ? {hostFingerprint:row.host_fingerprint}:{}),
     enabled:!!row.enabled,createdAt:row.created_at,updatedAt:row.updated_at
