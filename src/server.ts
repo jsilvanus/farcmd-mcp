@@ -16,6 +16,7 @@ import { isActiveUser } from './storage/interface.js';
 import { auditRetentionMs } from './audit.js';
 import { parseTrustProxy, productionConfigProblems } from './config.js';
 import { executionLimits } from './limits.js';
+import { contentSecurityPolicy } from './csp.js';
 
 const problems=productionConfigProblems(process.env);
 if(problems.length)throw new Error('Refusing to start with an unsafe production configuration:\n- '+problems.join('\n- '));
@@ -40,7 +41,7 @@ const retentionMs=auditRetentionMs();
 if(retentionMs>0){store.cleanupSecurityEvents(retentionMs);setInterval(()=>store.cleanupSecurityEvents(retentionMs),86_400_000).unref();}
 const options:FastifyHttpOptions<Server>={logger:true,bodyLimit:256*1024,trustProxy:parseTrustProxy(process.env.FARCMD_TRUST_PROXY)};
 const app=Fastify(options);
-app.addHook('onSend',async(_request,reply,payload)=>{reply.header('X-Content-Type-Options','nosniff').header('X-Frame-Options','DENY').header('Referrer-Policy','no-referrer');if(process.env.NODE_ENV==='production')reply.header('Strict-Transport-Security','max-age=31536000; includeSubDomains');if(process.env.NODE_ENV==='production')reply.header('Content-Security-Policy',"default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'");return payload;});
+app.addHook('onSend',async(_request,reply,payload)=>{reply.header('X-Content-Type-Options','nosniff').header('X-Frame-Options','DENY').header('Referrer-Policy','no-referrer');if(process.env.NODE_ENV==='production')reply.header('Strict-Transport-Security','max-age=31536000; includeSubDomains');if(process.env.NODE_ENV==='production'&&!reply.hasHeader('Content-Security-Policy'))reply.header('Content-Security-Policy',contentSecurityPolicy());return payload;});
 await app.register(formbody);await app.register(cookie);await mountWebApi(app,users,store);
 if(process.env.NODE_ENV==='production')await app.register(fastifyStatic,{root:fileURLToPath(new URL('./web/',import.meta.url)),prefix:'/'});
 await mountOAuthMetadata(app,publicUrl);
