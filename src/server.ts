@@ -1,8 +1,9 @@
-import Fastify from 'fastify';
+import Fastify, { type FastifyHttpOptions } from 'fastify';
+import type { Server } from 'node:http';
 import formbody from '@fastify/formbody';
 import cookie from '@fastify/cookie';
 import fastifyStatic from '@fastify/static';
-import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { hash } from '@node-rs/argon2';
 import { randomUUID } from 'node:crypto';
 import { FarcmdConnectorImpl } from './connector.js';
@@ -13,7 +14,10 @@ import { mountWebApi } from './web-api.js';
 import { SqliteAuthStore, SqliteUserStore } from './storage/sqlite.js';
 import { isActiveUser } from './storage/interface.js';
 import { auditRetentionMs } from './audit.js';
+import { parseTrustProxy, productionConfigProblems } from './config.js';
 
+const problems=productionConfigProblems(process.env);
+if(problems.length)throw new Error('Refusing to start with an unsafe production configuration:\n- '+problems.join('\n- '));
 const port=Number(process.env.PORT??'5999');
 const publicUrl=process.env.MCP_PUBLIC_URL??('http://localhost:'+port);
 const secretText=process.env.JWT_SECRET;
@@ -32,10 +36,11 @@ if(!existingDefault&&defaultUserPassword){users.createUser({id:process.env.MCP_D
 // Audit log retention (FARCMD_AUDIT_RETENTION_DAYS, default 365, 0 = keep forever): prune at start and daily.
 const retentionMs=auditRetentionMs();
 if(retentionMs>0){store.cleanupSecurityEvents(retentionMs);setInterval(()=>store.cleanupSecurityEvents(retentionMs),86_400_000).unref();}
-const app=Fastify({logger:true,bodyLimit:256*1024});
+const options:FastifyHttpOptions<Server>={logger:true,bodyLimit:256*1024,trustProxy:parseTrustProxy(process.env.FARCMD_TRUST_PROXY)};
+const app=Fastify(options);
 app.addHook('onSend',async(_request,reply,payload)=>{reply.header('X-Content-Type-Options','nosniff').header('X-Frame-Options','DENY').header('Referrer-Policy','no-referrer');if(process.env.NODE_ENV==='production')reply.header('Strict-Transport-Security','max-age=31536000; includeSubDomains');if(process.env.NODE_ENV==='production')reply.header('Content-Security-Policy',"default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'");return payload;});
 await app.register(formbody);await app.register(cookie);await mountWebApi(app,users,store);
-if(process.env.NODE_ENV==='production')await app.register(fastifyStatic,{root:join(process.cwd(),'dist/web'),prefix:'/'});
+if(process.env.NODE_ENV==='production')await app.register(fastifyStatic,{root:fileURLToPath(new URL('./web/',import.meta.url)),prefix:'/'});
 await mountOAuthMetadata(app,publicUrl);
 await mountAuthorizationServer(app,publicUrl,publicUrl+'/mcp',secret,store,users);
 await mountMcpHttp(app,{connector:new FarcmdConnectorImpl(store.getDatabase(),publicUrl),publicUrl,jwtSecret:secret,resource:publicUrl+'/mcp',isUserActive:id=>isActiveUser(users.getUser(id))});
