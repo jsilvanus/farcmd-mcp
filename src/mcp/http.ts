@@ -19,23 +19,27 @@ export interface McpHttpOptions {
 
 export async function mountMcpHttp(app: FastifyInstance, options: McpHttpOptions): Promise<void> {
   app.post('/mcp', async (request, reply) => {
-    let authInfo: AuthInfo | undefined;
+    let authInfo: AuthInfo;
     const header = request.headers.authorization;
 
-    if (header?.startsWith('Bearer ')) {
-      try {
-        const token = header.slice('Bearer '.length);
-        const payload = await verifyBearerToken(token, options.jwtSecret, options.publicUrl, options.resource);
-        if (typeof payload.sub === 'string' && options.isUserActive && !options.isUserActive(payload.sub)) throw new Error('inactive user');
-        authInfo = {
-          token,
-          clientId: typeof payload.client_id === 'string' ? payload.client_id : 'oauth-client',
-          scopes: typeof payload.scope === 'string' ? payload.scope.split(' ') : [],
-          extra: { ...(typeof payload.sub === 'string' ? {userId:payload.sub} : {}) },
-        };
-      } catch {
-        // Tool boundary returns the MCP authentication error.
-      }
+    // MCP authorization: requests without a valid access token get 401 and a challenge that points to
+    // the protected resource metadata, which is how clients (e.g. ChatGPT) discover and confirm OAuth.
+    const challenge = (error?: string) => reply.code(401).header('WWW-Authenticate',
+      'Bearer resource_metadata="' + options.publicUrl + '/.well-known/oauth-protected-resource/mcp", scope="mcp"' +
+      (error ? ', error="' + error + '", error_description="The access token is missing, expired or invalid."' : '')).send({error: error ?? 'unauthorized'});
+    if (!header?.startsWith('Bearer ')) return challenge();
+    try {
+      const token = header.slice('Bearer '.length);
+      const payload = await verifyBearerToken(token, options.jwtSecret, options.publicUrl, options.resource);
+      if (typeof payload.sub === 'string' && options.isUserActive && !options.isUserActive(payload.sub)) throw new Error('inactive user');
+      authInfo = {
+        token,
+        clientId: typeof payload.client_id === 'string' ? payload.client_id : 'oauth-client',
+        scopes: typeof payload.scope === 'string' ? payload.scope.split(' ') : [],
+        extra: { ...(typeof payload.sub === 'string' ? {userId:payload.sub} : {}) },
+      };
+    } catch {
+      return challenge('invalid_token');
     }
 
     const userId=typeof authInfo?.extra?.userId==='string'?authInfo.extra.userId:undefined;

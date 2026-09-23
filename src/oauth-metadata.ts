@@ -15,12 +15,15 @@ export async function mountOAuthMetadata(app: FastifyInstance, publicUrl: string
     authorization_response_iss_parameter_supported: true,
   };
 
-  app.get('/.well-known/oauth-protected-resource', async (_request, reply) => reply.send({
+  const protectedResource = {
     resource,
     authorization_servers: [publicUrl],
     scopes_supported: ['mcp'],
     bearer_methods_supported: ['header'],
-  }));
+  };
+  // RFC 9728: the metadata of resource <publicUrl>/mcp lives at the path-inserted URL; the root URL is kept for older clients.
+  app.get('/.well-known/oauth-protected-resource/mcp', async (_request, reply) => reply.send(protectedResource));
+  app.get('/.well-known/oauth-protected-resource', async (_request, reply) => reply.send(protectedResource));
 
   app.get('/.well-known/oauth-authorization-server', async (_request, reply) => reply.send(metadata));
   app.get('/.well-known/openid-configuration', async (_request, reply) => reply.send(metadata));
