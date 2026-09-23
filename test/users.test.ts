@@ -99,7 +99,11 @@ test('a disabled user is refused on every path and can be re-enabled',async()=>{
     const refresh=await f.app.inject({method:'POST',url:'/oauth/token',payload:{grant_type:'refresh_token',refresh_token:rt_d2,client_id:'https://client.example/c.json'}});
     assert.equal(refresh.statusCode,400); assert.equal(refresh.json().error,'invalid_grant');
     const mcp=await mcpHealth(f.app,access);
-    assert.doesNotMatch(mcp,/"ok": ?true|\\"ok\\": ?true/); assert.match(mcp,/Authentication required/,'a still-valid access token is refused');
+    assert.doesNotMatch(mcp,/"ok": ?true|\\"ok\\": ?true/); assert.match(mcp,/invalid_token/,'a still-valid access token is refused');
+    const challenge=await f.app.inject({method:'POST',url:'/mcp',headers:{authorization:'Bearer '+access,'content-type':'application/json'},payload:{jsonrpc:'2.0',id:1,method:'tools/list'}});
+    assert.equal(challenge.statusCode,401); assert.match(String(challenge.headers['www-authenticate']),/^Bearer resource_metadata="http:\/\/localhost:5999\/\.well-known\/oauth-protected-resource\/mcp", scope="mcp", error="invalid_token"/);
+    const anonymous=await f.app.inject({method:'POST',url:'/mcp',headers:{'content-type':'application/json'},payload:{jsonrpc:'2.0',id:1,method:'initialize'}});
+    assert.equal(anonymous.statusCode,401,'no token: challenge'); assert.doesNotMatch(String(anonymous.headers['www-authenticate']),/error=/);
 
     f.admin.setDisabled('d@example.test',false);
     assert.equal((await login(f.app,'d@example.test')).status,200);
