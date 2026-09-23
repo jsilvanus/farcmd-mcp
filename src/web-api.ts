@@ -45,11 +45,21 @@ function publicUser(user:{id:string;name:string;email?:string;createdAt:number})
 function cookieOptions() {
   return {httpOnly:true,secure:process.env.NODE_ENV==='production',sameSite:'lax' as const,path:'/',maxAge:7*24*60*60};
 }
-function checkMutationOrigin(request:FastifyRequest): boolean {
+/** Header the web UI sends on every API call. A cross-site page cannot set it without a CORS preflight, which farcmd never grants. */
+export const CSRF_HEADER='x-farcmd-request';
+/**
+ * CSRF defence for state-changing API calls, in depth: the custom header (required), Fetch Metadata
+ * (a browser-reported cross-site or sibling-subdomain request is refused) and Origin (when sent it
+ * must be the public origin). The session cookie is also SameSite=Lax.
+ */
+function checkMutationOrigin(request:FastifyRequest): string|undefined {
+  if (request.headers[CSRF_HEADER]!=='1') return 'Missing '+CSRF_HEADER+' header';
+  const site=request.headers['sec-fetch-site'];
+  if (site!==undefined && site!=='same-origin' && site!=='none') return 'Cross-site request refused';
   const origin=request.headers.origin;
-  if (!origin) return true;
+  if (!origin) return undefined;
   const expected=process.env.MCP_PUBLIC_URL ?? `http://localhost:${process.env.PORT ?? '5999'}`;
-  try { return new URL(origin).origin===new URL(expected).origin; } catch { return false; }
+  try { return new URL(origin).origin===new URL(expected).origin ? undefined : 'Invalid request origin'; } catch { return 'Invalid request origin'; }
 }
 function sessionFrom(request:FastifyRequest, sessions:WebSessionService) {
   const token=request.cookies.farcmd_session;
@@ -97,8 +107,9 @@ function auditDetails(body:unknown,query:unknown):Record<string,unknown>{
 
 export async function mountWebApi(app:FastifyInstance, users:UserStore, sessionStore:WebSessionStore): Promise<void> {
   app.addHook('preHandler', async (request,reply) => {
-    if (['POST','PATCH','PUT','DELETE'].includes(request.method) && request.url.startsWith('/api/') && !checkMutationOrigin(request)) {
-      return reply.code(403).send({error:'Invalid request origin'});
+    if (['POST','PATCH','PUT','DELETE'].includes(request.method) && request.url.startsWith('/api/')) {
+      const refused=checkMutationOrigin(request);
+      if (refused) return reply.code(403).send({error:refused});
     }
   });
   const sessions=new WebSessionService(sessionStore);

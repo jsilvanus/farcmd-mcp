@@ -15,9 +15,11 @@ import { SqliteAuthStore, SqliteUserStore } from './storage/sqlite.js';
 import { isActiveUser } from './storage/interface.js';
 import { auditRetentionMs } from './audit.js';
 import { parseTrustProxy, productionConfigProblems } from './config.js';
+import { executionLimits } from './limits.js';
 
 const problems=productionConfigProblems(process.env);
 if(problems.length)throw new Error('Refusing to start with an unsafe production configuration:\n- '+problems.join('\n- '));
+executionLimits(); // validates FARCMD_SSH_MAX_* and FARCMD_MCP_EXECUTIONS_PER_MINUTE at startup
 const port=Number(process.env.PORT??'5999');
 const publicUrl=process.env.MCP_PUBLIC_URL??('http://localhost:'+port);
 const secretText=process.env.JWT_SECRET;

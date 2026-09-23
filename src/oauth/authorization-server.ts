@@ -6,7 +6,6 @@ import { randomToken, verifyS256 } from './pkce.js';
 import { issueAccessToken } from './jwt.js';
 import { REFRESH_TOKEN_LIFETIME_MS } from './tokens.js';
 
-const loginSessions=new Map<string,{userId:string;oauth:string;expires:number}>();
 const LEVELS=[1,2,3,4,5] as const;
 
 function escapeHtml(value:string):string{return value.replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'","&#39;");}
@@ -34,14 +33,14 @@ export async function mountAuthorizationServer(app:FastifyInstance,issuer:string
   const body=request.body as Record<string,string|undefined|string[]>;if(!body.oauth&&!body.session)return reply.code(400).type('text/html').send(page('Login required','<h1>Login required</h1>'));
   let q:Record<string,string|undefined>;let metadata:Awaited<ReturnType<typeof validateRequest>>;let userId:string;
   try{
-   if(body.session){const session=loginSessions.get(body.session as string);if(!session||session.expires<Date.now())throw new Error('Expired login session');q=decodeOAuth(session.oauth);userId=session.userId;}
+   if(body.session){const session=authStore.oauthTokens().getLoginSession(String(body.session));if(!session||session.expires<Date.now())throw new Error('Expired login session');q=decodeOAuth(session.oauth);userId=session.userId;}
    else{q=decodeOAuth(body.oauth as string);if(!body.email||!body.password)throw new Error('Login required');const user=users.getUserByEmail(body.email as string);if(!user?.passwordHash||!isActiveUser(user)||!(await verify(user.passwordHash,body.password as string))){authStore.recordSecurityEvent?.(user?.id,q.client_id,'oauth.login',{email:String(body.email).slice(0,320),ip:request.ip},'failure');return reply.code(401).type('text/html').send(loginPage(body.oauth as string,'Invalid email or password.'));}userId=user.id;}
    metadata=await validateRequest(q);
   }catch{return reply.code(400).type('text/html').send(page('Invalid request','<h1>Invalid authorization request</h1>'));}
   const user=users.getUser(userId);if(!isActiveUser(user))return reply.code(401).type('text/html').send(page('Invalid account','<h1>Invalid account</h1>'));
-  if(body.action===undefined){const session=randomToken();const oauthValue=typeof body.oauth==='string'?body.oauth:(body.session?loginSessions.get(body.session as string)?.oauth:undefined);if(!oauthValue)return reply.code(400).type('text/html').send(page('Invalid request','<h1>Invalid authorization session</h1>'));loginSessions.set(session,{userId:user.id,oauth:oauthValue,expires:Date.now()+5*60_000});const grant=authStore.getOAuthGrant(user.id,q.client_id!);const levels=grant?.visibleLevels??[1,2,3];return reply.type('text/html').send(consentPage(session,user.name,metadata.client_name,levels,!!grant?.level5PermanentlyHidden));}
+  if(body.action===undefined){const session=randomToken();const oauthValue=typeof body.oauth==='string'?body.oauth:(body.session?authStore.oauthTokens().getLoginSession(String(body.session))?.oauth:undefined);if(!oauthValue)return reply.code(400).type('text/html').send(page('Invalid request','<h1>Invalid authorization session</h1>'));authStore.oauthTokens().saveLoginSession(session,{userId:user.id,oauth:oauthValue,expires:Date.now()+5*60_000});const grant=authStore.getOAuthGrant(user.id,q.client_id!);const levels=grant?.visibleLevels??[1,2,3];return reply.type('text/html').send(consentPage(session,user.name,metadata.client_name,levels,!!grant?.level5PermanentlyHidden));}
   if(!body.session)return reply.code(400).type('text/html').send(page('Invalid session','<h1>Invalid authorization session</h1>'));
-  const session=loginSessions.get(body.session as string);if(!session||session.expires<Date.now())return reply.code(400).type('text/html').send(page('Expired session','<h1>Authorization session expired</h1>'));loginSessions.delete(body.session as string);
+  if(!authStore.oauthTokens().consumeLoginSession(String(body.session)))return reply.code(400).type('text/html').send(page('Expired session','<h1>Authorization session expired</h1>'));
   const target=new URL(q.redirect_uri!);target.searchParams.set('iss',issuer);if(q.state)target.searchParams.set('state',q.state);
   if(body.action!=='approve'){authStore.recordSecurityEvent?.(user.id,q.client_id,'oauth.authorize',{clientName:metadata.client_name,decision:'denied'},'failure');target.searchParams.set('error','access_denied');return reply.redirect(target.toString());}
   const allowed=selectedLevels(body);const permanent5=body.permanentLevel5==='yes';const existing=authStore.getOAuthGrant(user.id,q.client_id!);
