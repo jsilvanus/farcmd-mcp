@@ -58,7 +58,7 @@ test('web UI: sign in, visit every page, toggle MCP access, sign out',{skip:!exi
     await page.getByRole('button',{name:'Generate key'}).click();
     const dialog=page.locator('dialog.modal');
     await dialog.getByLabel('Name',{exact:true}).fill('ops-master'); await dialog.getByRole('button',{name:'Generate'}).click();
-    await page.locator('.row',{hasText:'ops-master'}).waitFor(); assert.equal(await dialog.count(),0,'dialog closes after saving');
+    await page.locator('.row',{hasText:'ops-master'}).waitFor(); await dialog.waitFor({state:'detached'}); // closes after saving
     await page.getByRole('button',{name:'Add target'}).click();
     await dialog.getByLabel('Name',{exact:true}).fill('web-01'); await dialog.getByLabel('Hostname',{exact:true}).fill('web-01.internal'); await dialog.getByLabel('Username',{exact:true}).fill('deploy');
     await dialog.getByRole('button',{name:'Add target'}).click();
