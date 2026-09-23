@@ -2,3 +2,4 @@ body{font-family:system-ui,sans-serif;background:#f6f7f9;margin:0;color:#202124}
 .verifier{border-top:1px solid #ddd;margin-top:.5rem;padding-top:.5rem}
 #verifier-script{white-space:pre-wrap;word-break:break-all;max-height:60vh;overflow:auto}
 table.audit{border-collapse:collapse;width:100%;font-size:.85rem}table.audit td,table.audit th{border-bottom:1px solid #ddd;padding:.3rem;text-align:left;vertical-align:top}table.audit td:last-child{word-break:break-word;max-width:40ch}
+#mcp-access{margin:0 0 1.5rem;padding:1.2rem}#mcp-access h2{margin:0 0 .5rem;font-size:1.1rem}#mcp-access .ok strong{color:#137333}#mcp-access .warn strong{color:#b3261e}

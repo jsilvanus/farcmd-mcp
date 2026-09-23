@@ -3,6 +3,7 @@ import { hash, verify } from '@node-rs/argon2';
 import { randomToken } from './oauth/pkce.js';
 import { isActiveUser, type UserStore, type WebSessionStore } from './storage/interface.js';
 import { SqliteSettingsStore } from './storage/settings.js';
+import { McpAccessPolicy } from './mcp-access.js';
 import { WebSessionService } from './web-session.js';
 import { SqliteSshStore } from './storage/ssh.js';
 import { decryptSecret, encryptSecret } from './crypto-at-rest.js';
@@ -77,7 +78,7 @@ export const AUDITED_ROUTES:Record<string,[string,string|undefined]>={
   'POST /api/commands/:id/key':['capability.install','command'],'DELETE /api/commands/:id/key':['capability.remove','command'],
   'POST /api/commands/:id/execution-password':['command.level5_password_set','command'],'POST /api/confirm/:token':['command.confirmation',undefined],
   'PATCH /api/oauth/grants/:clientId':['oauth_grant.update','oauth_client'],'POST /api/oauth/grants/:clientId/revoke':['oauth_grant.revoke','oauth_client'],
-  'GET /api/history/shell':['shell_history.read','ssh_target'],
+  'GET /api/history/shell':['shell_history.read','ssh_target'],'PUT /api/mcp-access':['mcp_access.update','user'],
 };
 /** Non-secret request fields worth keeping in the audit trail (values). Everything else is reduced to its key name. */
 const AUDITED_FIELDS=new Set(['name','description','hostname','port','username','sshKeyId','hostFingerprint','enabled','level','type','targetId','visibleLevels','level5PermanentlyHidden','installUsername','installKeyId','email']);
@@ -105,6 +106,7 @@ export async function mountWebApi(app:FastifyInstance, users:UserStore, sessionS
   if (!sshDb) throw new Error('Web session store must expose the application database');
   const audit=new AuditLog(sshDb);
   const settings=new SqliteSettingsStore(sshDb);
+  const mcpAccess=new McpAccessPolicy(sshDb);
   app.get('/api/auth/config',async()=>({registrationEnabled:settings.registrationEnabled()}));
   // Audit trail for every state-changing (and sensitive read) web API call. The acting user is resolved
   // from the session before the handler runs, so logout and account deletion are attributed correctly.
@@ -318,6 +320,9 @@ export async function mountWebApi(app:FastifyInstance, users:UserStore, sessionS
     const outcome=q.outcome==='success'||q.outcome==='failure'?q.outcome:undefined;
     return audit.list(user.id,{...(q.event?{event:q.event}:{}),...(outcome?{outcome}:{}),...(q.search?{search:q.search}:{}),limit:q.limit?Number(q.limit):100,offset:q.offset?Number(q.offset):0});
   });
+  // User-scoped MCP kill switch: MCP tools refuse this user's clients; the server and the web UI keep running.
+  app.get('/api/mcp-access',async(request,reply)=>{const user=await requireUser(request,reply,users,sessions);if(!user)return;return mcpAccess.status(user.id);});
+  app.put('/api/mcp-access',async(request,reply)=>{const user=await requireUser(request,reply,users,sessions);if(!user)return;const b=request.body as Record<string,unknown>;if(typeof b.enabled!=='boolean')return reply.code(400).send({error:'enabled must be true or false'});mcpAccess.setUserEnabled(user.id,b.enabled);return mcpAccess.status(user.id);});
   app.get('/api/audit/verify',async(request,reply)=>{const user=await requireUser(request,reply,users,sessions);if(!user)return;return audit.verify();});
   app.get('/api/auth/session',async (request,reply)=>{
     const user=await requireUser(request,reply,users,sessions); if(!user)return;

@@ -11,6 +11,7 @@ import { SqliteOAuthGrantStore } from './oauth/grants.js';
 import { SqliteExecutionStore, confirmationForLevel, type ConfirmationRequirement } from './execution.js';
 import { randomToken } from './oauth/pkce.js';
 import { SqliteExecutionHistoryStore } from './execution-history.js';
+import { McpAccessPolicy } from './mcp-access.js';
 
 export interface ConnectorContext { userId:string; clientId:string; accessToken:string; }
 export interface CommandSummary { id:string; name:string; description:string; level:CommandLevel; enabled:boolean; confirmation:ConfirmationRequirement; }
@@ -25,13 +26,16 @@ export interface FarcmdConnector {
 }
 
 export class FarcmdConnectorImpl implements FarcmdConnector {
-  private readonly ssh:SqliteSshStore; private readonly commands:SqliteCommandStore; private readonly grants:SqliteOAuthGrantStore; private readonly pending:SqliteExecutionStore;  private readonly history:SqliteExecutionHistoryStore; private readonly installations:SqliteCommandInstallationStore; private readonly verifier:CapabilityVerificationService;
+  private readonly ssh:SqliteSshStore; private readonly commands:SqliteCommandStore; private readonly grants:SqliteOAuthGrantStore; private readonly pending:SqliteExecutionStore;  private readonly history:SqliteExecutionHistoryStore; private readonly installations:SqliteCommandInstallationStore; private readonly verifier:CapabilityVerificationService; private readonly access:McpAccessPolicy;
   constructor(private readonly db:DatabaseSync,private readonly publicUrl:string){
-    this.ssh=new SqliteSshStore(db); this.commands=new SqliteCommandStore(db); this.grants=new SqliteOAuthGrantStore(db); this.pending=new SqliteExecutionStore(db); this.pending.cleanup(); this.history=new SqliteExecutionHistoryStore(db); this.installations=new SqliteCommandInstallationStore(db); this.verifier=new CapabilityVerificationService(db,publicUrl);
+    this.ssh=new SqliteSshStore(db); this.commands=new SqliteCommandStore(db); this.grants=new SqliteOAuthGrantStore(db); this.pending=new SqliteExecutionStore(db); this.pending.cleanup(); this.history=new SqliteExecutionHistoryStore(db); this.installations=new SqliteCommandInstallationStore(db); this.verifier=new CapabilityVerificationService(db,publicUrl); this.access=new McpAccessPolicy(db);
   }
-  async health(_context:ConnectorContext):Promise<{ok:true}>{return {ok:true};}
-  visibleLevels(context:ConnectorContext):CommandLevel[]{const grant=this.grants.get(context.userId,context.clientId);return grant&&!grant.revokedAt?[...grant.visibleLevels]:[];}
+  // MCP kill switch: health and list_commands stay registered so the client sees why access is refused;
+  // no execution tool is exposed while MCP access is off.
+  async health(context:ConnectorContext):Promise<{ok:true}>{this.access.assertAllowed(context.userId);return {ok:true};}
+  visibleLevels(context:ConnectorContext):CommandLevel[]{if(!this.access.check(context.userId).allowed)return [];const grant=this.grants.get(context.userId,context.clientId);return grant&&!grant.revokedAt?[...grant.visibleLevels]:[];}
   async listCommands(context:ConnectorContext):Promise<CommandSummary[]>{
+    this.access.assertAllowed(context.userId);
     const grant=this.grants.get(context.userId,context.clientId);
     if(!grant||grant.revokedAt)return [];
     return this.commands.list(context.userId).filter(c=>c.enabled&&grant.visibleLevels.includes(c.level)).map(c=>({id:c.id,name:c.name,description:c.description,level:c.level,enabled:c.enabled,confirmation:confirmationForLevel(c.level)}));
@@ -50,6 +54,7 @@ export class FarcmdConnectorImpl implements FarcmdConnector {
     }
   }
   private async executeCommandChecked(context:ConnectorContext,commandId:string,expectedLevel:CommandLevel,confirmationToken?:string):Promise<CommandExecution|PendingConfirmation>{
+    this.access.assertAllowed(context.userId);
     const grant=this.grants.get(context.userId,context.clientId);
     if(!grant||grant.revokedAt)throw new Error('This OAuth authorization has been revoked or does not exist.');
     const command=this.commands.get(context.userId,commandId);
@@ -72,6 +77,8 @@ export class FarcmdConnectorImpl implements FarcmdConnector {
     const p=this.pending.get(token); if(!p||p.userId!==userId)throw new Error('Confirmation request not found or expired.');
     const audit=(event:string,details:Record<string,unknown>,outcome:AuditOutcome='success')=>this.audit(userId,p.clientId,event,{...details},outcome,'web');
     audit('command.confirmation_attempt',{commandId:p.commandId,level:p.level});
+    // A request made before MCP was turned off must not run afterwards.
+    const access=this.access.check(p.userId); if(!access.allowed){audit('command.execute_denied',{commandId:p.commandId,level:p.level,error:access.message},'failure');throw new Error(access.message);}
     const grant=this.grants.get(p.userId,p.clientId); if(!grant||grant.revokedAt||!grant.visibleLevels.includes(p.level))throw new Error('The OAuth authorization is no longer permitted.');
     const command=this.commands.get(p.userId,p.commandId); if(!command||!command.enabled||command.level!==p.level)throw new Error('The command is no longer available.');
     const confirmation=confirmationForLevel(p.level);
