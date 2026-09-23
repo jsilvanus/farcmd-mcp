@@ -13,6 +13,7 @@ import { fileURLToPath } from 'node:url';
 import { SqliteAuthStore } from '../storage/sqlite.js';
 import { UserAdmin, UserAdminError } from '../user-admin.js';
 import { AuditLog } from '../audit.js';
+import type { McpAccessStatus } from '../mcp-access.js';
 import { chmodSync, existsSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
 
@@ -27,6 +28,8 @@ Usage:
   farcmd-admin user logout --email <email>
   farcmd-admin user delete --email <email> [--yes] [--force]
   farcmd-admin registration status|enable|disable
+  farcmd-admin mcp status [--email <email>]
+  farcmd-admin mcp enable|disable --all | --email <email>
   farcmd-admin backup <file>
   farcmd-admin audit verify
 
@@ -42,6 +45,9 @@ user disable   blocks sign-in, web sessions, OAuth tokens and MCP access immedia
 user logout    ends all web sessions and OAuth refresh tokens of the user.
 backup         consistent online copy of the database (safe while the server runs). Back up
                FARCMD_ENCRYPTION_KEY separately: without it the copy's credentials and audit chain are unusable.
+mcp            MCP kill switch; the server and web UI keep running and OAuth grants stay intact.
+               --all switches MCP off/on for every user; --email blocks one user (the user cannot
+               lift an administrator block; users also have their own switch in the web UI).
 audit verify   recompute the audit log's hash chain (exit 1 if it is broken).
 user delete    removes the user and all their farcmd data; refused while capabilities or verifiers
                remain installed on remote hosts unless --force (remove them in the web UI first).`;
@@ -87,7 +93,7 @@ const date=(ms?:number)=>ms===undefined?'':new Date(ms).toISOString().replace('T
 
 export async function main(argv:string[]):Promise<number>{
   const {values,positionals}=parseArgs({args:argv,allowPositionals:true,strict:true,options:{
-    email:{type:'string'},name:{type:'string'},'password-stdin':{type:'boolean'},yes:{type:'boolean'},force:{type:'boolean'},json:{type:'boolean'},help:{type:'boolean',short:'h'}}});
+    email:{type:'string'},name:{type:'string'},'password-stdin':{type:'boolean'},yes:{type:'boolean'},force:{type:'boolean'},json:{type:'boolean'},all:{type:'boolean'},help:{type:'boolean',short:'h'}}});
   const [area,action]=positionals;
   if(values.help||!area){process.stdout.write(USAGE+'\n');return values.help?0:2;}
   // Must be the server's key: it keys the audit log's hash chain (and protects stored credentials).
@@ -100,6 +106,24 @@ export async function main(argv:string[]):Promise<number>{
     if(action==='enable'||action==='disable')admin.setRegistration(action==='enable');
     else if(action!=='status'&&action!==undefined)throw new UsageError('Unknown registration action: '+action);
     process.stdout.write('Self-service registration is '+(admin.registrationEnabled()?'ENABLED':'disabled')+'.\n');
+    return 0;
+  }
+  if(area==='mcp'){
+    const describe=(st:McpAccessStatus)=>(st.effective?'ON':'OFF')+(st.reason==='global'?' (disabled for all users)':st.reason==='admin'?' (blocked by administrator)':st.reason==='user'?' (turned off by the user)':st.reason==='account'?' (account disabled)':'');
+    if(action==='enable'||action==='disable'){
+      if(!!values.all===!!values.email)throw new UsageError('mcp '+action+' needs exactly one of --all or --email.');
+      if(values.all){
+        admin.setMcpGlobal(action==='enable');
+        process.stdout.write('MCP access is now '+(action==='enable'?'ENABLED':'DISABLED')+' for all users.\n');
+        const blocked=admin.list().filter(u=>u.mcp.adminBlocked).map(u=>u.email);
+        if(action==='enable'&&blocked.length)process.stdout.write('Still blocked individually: '+blocked.join(', ')+' (farcmd-admin mcp enable --email …).\n');
+      }else process.stdout.write(email()+': MCP access '+describe(admin.setMcpBlocked(email(),action==='disable'))+'.\n');
+      return 0;
+    }
+    if(action!=='status'&&action!==undefined)throw new UsageError('Unknown mcp action: '+action);
+    if(values.email){process.stdout.write(email()+': MCP access '+describe(admin.mcpStatus(email()))+'.\n');return 0;}
+    process.stdout.write('MCP access (all users): '+(admin.mcpGlobalEnabled()?'ENABLED':'DISABLED')+'.\n');
+    for(const u of admin.list())if(!u.mcp.effective&&u.mcp.reason!=='global')process.stdout.write('  '+(u.email??u.id)+': '+describe(u.mcp)+'\n');
     return 0;
   }
   if(area==='backup'){
@@ -125,7 +149,7 @@ export async function main(argv:string[]):Promise<number>{
       const users=admin.list();
       if(values.json){process.stdout.write(JSON.stringify(users,null,2)+'\n');return 0;}
       if(!users.length){process.stdout.write('No users.\n');return 0;}
-      for(const u of users)process.stdout.write([u.email??'(no email)',u.name,u.disabledAt!==undefined?'DISABLED '+date(u.disabledAt):'active','created '+date(u.createdAt),u.commands+' commands',u.targets+' targets',u.installedCapabilities+' installed capabilities',u.verifiers+' verifiers'].join('  |  ')+'\n');
+      for(const u of users)process.stdout.write([u.email??'(no email)',u.name,u.disabledAt!==undefined?'DISABLED '+date(u.disabledAt):'active','created '+date(u.createdAt),u.commands+' commands',u.targets+' targets',u.installedCapabilities+' installed capabilities',u.verifiers+' verifiers','MCP '+(u.mcp.effective?'on':u.mcp.reason==='admin'?'BLOCKED':u.mcp.reason==='user'?'off (user)':u.mcp.reason==='global'?'off (all)':'off')].join('  |  ')+'\n');
       return 0;
     }
     case 'create':{

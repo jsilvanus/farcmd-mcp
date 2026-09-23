@@ -6,6 +6,7 @@ import type { AuthStore, McpUser, UserStore, WebSessionRecord, WebSessionStore }
 import { SqliteOAuthGrantStore } from '../oauth/grants.js';
 import { AuditLog, migrateAuditTable, type AuditOutcome } from '../audit.js';
 import { SqliteOAuthTokenStore, migrateOAuthTokenTables } from '../oauth/tokens.js';
+import { migrateMcpAccess } from '../mcp-access.js';
 
 export class SqliteAuthStore implements AuthStore, WebSessionStore {
   private readonly db:DatabaseSync;
@@ -52,6 +53,7 @@ export class SqliteAuthStore implements AuthStore, WebSessionStore {
     try{this.db.exec('ALTER TABLE oauth_grants ADD COLUMN level5_permanently_hidden INTEGER NOT NULL DEFAULT 0');}catch{}
     migrateAuditTable(this.db);
     migrateOAuthTokenTables(this.db);
+    migrateMcpAccess(this.db);
     try{this.db.exec('ALTER TABLE users ADD COLUMN disabled_at INTEGER');}catch{}
     // Instance-wide settings managed by the operator (farcmd-admin CLI). Absent keys mean the secure default.
     this.db.exec('CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY,value TEXT NOT NULL,updated_at INTEGER NOT NULL)');

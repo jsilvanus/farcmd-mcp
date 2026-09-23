@@ -99,9 +99,25 @@ farcmd-admin user enable --email alice@example.org
 farcmd-admin user logout --email alice@example.org                      # ends all web sessions and refresh tokens
 farcmd-admin user delete --email alice@example.org [--yes] [--force]
 farcmd-admin registration status|enable|disable
+farcmd-admin mcp status [--email alice@example.org]
+farcmd-admin mcp disable --all                                          # MCP off for every user; server keeps running
+farcmd-admin mcp disable --email alice@example.org                      # MCP off for one user; the user cannot undo it
+farcmd-admin mcp enable --all | --email alice@example.org
 ```
 
 Passwords are never accepted as arguments, because they would end up in shell history and the process list. They are read from a hidden prompt, or from the first line of stdin with `--password-stdin` (e.g. `printf '%s\n' "$PW" | farcmd-admin user create … --password-stdin`). `user delete` removes the user and all of their farcmd data, but not the audit log. It refuses while the user still has capabilities or verifiers installed on remote hosts (remove them in the web UI first) unless `--force` is given. A disabled user's existing MCP access tokens are refused immediately, not just when they expire.
+
+### MCP access switch
+
+MCP can be turned off without stopping the farcmd process. Three switches apply, and MCP works for a user only while all three allow it:
+
+| Switch | Who | How |
+|---|---|---|
+| Own access | the user | **Turn off MCP access** button on the Dashboard and OAuth Sources pages (`PUT /api/mcp-access`) |
+| Per user | operator | `farcmd-admin mcp disable --email …`; the user sees "disabled by the administrator" and cannot lift it |
+| All users | operator | `farcmd-admin mcp disable --all` (setting `mcp_enabled`) |
+
+While MCP is off, execution tools are no longer listed. `farcmd_health` and `list_commands` stay listed but return an error that says why. Execution is refused even with a still-valid access token or a confirmation token obtained earlier, and a pending level 4/5 confirmation cannot be approved. The web UI, OAuth grants and tokens are left untouched, so turning MCP back on works immediately without reconnecting clients. Every change and refused call is audited. farcmd has no admin role in the web UI: operator actions are CLI-only.
 
 Mutating browser API requests validate the `Origin` header when present. Login and registration have a basic per-IP rate limit. This is intentionally a baseline; Phase 8 will add full CSRF strategy, stronger abuse controls, security event logging, and operational hardening.
 

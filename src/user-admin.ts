@@ -4,6 +4,7 @@ import { hash } from '@node-rs/argon2';
 import { SqliteUserStore } from './storage/sqlite.js';
 import { SqliteSettingsStore } from './storage/settings.js';
 import { AuditLog } from './audit.js';
+import { McpAccessPolicy, type McpAccessStatus } from './mcp-access.js';
 import type { McpUser } from './storage/interface.js';
 
 /**
@@ -12,7 +13,7 @@ import type { McpUser } from './storage/interface.js';
  * Every change is written to the audit log with actor "system".
  */
 export class UserAdminError extends Error { constructor(message:string){super(message);this.name='UserAdminError';} }
-export interface UserSummary { id:string; name:string; email?:string; createdAt:number; disabledAt?:number; commands:number; targets:number; installedCapabilities:number; verifiers:number; }
+export interface UserSummary { id:string; name:string; email?:string; createdAt:number; disabledAt?:number; commands:number; targets:number; installedCapabilities:number; verifiers:number; mcp:McpAccessStatus; }
 
 const EMAIL=/^\S+@\S+\.\S+$/;
 export function normalizeEmail(email:string):string{ return email.trim().toLowerCase(); }
@@ -22,15 +23,15 @@ export function validatePassword(password:string):void{ if(password.length<12||p
 const USER_TABLES=['web_sessions','pending_executions','execution_history','command_installations','remote_capability_ledger','verification_authorities','commands','ssh_targets','ssh_keys','oauth_grants'] as const;
 
 export class UserAdmin {
-  private readonly users:SqliteUserStore; private readonly settings:SqliteSettingsStore; private readonly audit:AuditLog;
-  constructor(private readonly db:DatabaseSync){ this.users=new SqliteUserStore(db); this.settings=new SqliteSettingsStore(db); this.audit=new AuditLog(db); }
+  private readonly users:SqliteUserStore; private readonly settings:SqliteSettingsStore; private readonly audit:AuditLog; private readonly mcp:McpAccessPolicy;
+  constructor(private readonly db:DatabaseSync){ this.users=new SqliteUserStore(db); this.settings=new SqliteSettingsStore(db); this.audit=new AuditLog(db); this.mcp=new McpAccessPolicy(db); }
 
   find(email:string):McpUser{ const u=this.users.getUserByEmail(normalizeEmail(email)); if(!u)throw new UserAdminError('No user with email '+email+'.'); return u; }
   private count(sql:string,userId:string):number{ return Number((this.db.prepare(sql).get(userId) as any).n); }
   summary(u:McpUser):UserSummary{
     return {id:u.id,name:u.name,...(u.email?{email:u.email}:{}),createdAt:u.createdAt,...(u.disabledAt!==undefined?{disabledAt:u.disabledAt}:{}),
       commands:this.count('SELECT COUNT(*) AS n FROM commands WHERE user_id=?',u.id),targets:this.count('SELECT COUNT(*) AS n FROM ssh_targets WHERE user_id=?',u.id),
-      installedCapabilities:this.count('SELECT COUNT(*) AS n FROM command_installations WHERE user_id=?',u.id),verifiers:this.count('SELECT COUNT(*) AS n FROM verification_authorities WHERE user_id=?',u.id)};
+      installedCapabilities:this.count('SELECT COUNT(*) AS n FROM command_installations WHERE user_id=?',u.id),verifiers:this.count('SELECT COUNT(*) AS n FROM verification_authorities WHERE user_id=?',u.id),mcp:this.mcp.status(u.id)};
   }
   list():UserSummary[]{ return this.users.listUsers().map(u=>this.summary(u)); }
 
@@ -72,6 +73,20 @@ export class UserAdmin {
     const ended=disabled?this.endSessions(u.id):undefined;
     this.audit.record({event:disabled?'admin.user.disable':'admin.user.enable',actor:'system',userId:u.id,targetType:'user',targetId:u.id,details:ended?{sessionsEnded:ended.sessions,refreshTokensRevoked:ended.refreshTokens}:{}});
   }
+
+  /** Server-wide MCP switch (all users). The process and web UI keep running; OAuth grants are untouched. */
+  mcpGlobalEnabled():boolean{ return this.mcp.globalEnabled(); }
+  setMcpGlobal(enabled:boolean):void{
+    this.mcp.setGlobalEnabled(enabled);
+    this.audit.record({event:enabled?'admin.mcp.enable_all':'admin.mcp.disable_all',actor:'system',targetType:'setting',targetId:'mcp_enabled'});
+  }
+  /** Operator block for one user's MCP access; the user cannot lift it from the web UI. */
+  setMcpBlocked(email:string,blocked:boolean):McpAccessStatus{
+    const u=this.find(email); this.mcp.setAdminBlocked(u.id,blocked);
+    this.audit.record({event:blocked?'admin.mcp.block_user':'admin.mcp.unblock_user',actor:'system',userId:u.id,targetType:'user',targetId:u.id});
+    return this.mcp.status(u.id);
+  }
+  mcpStatus(email:string):McpAccessStatus{ return this.mcp.status(this.find(email).id); }
 
   /**
    * Delete a user and all of their farcmd data. Capabilities and verifiers installed on remote hosts
