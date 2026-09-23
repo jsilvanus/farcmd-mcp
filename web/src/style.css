@@ -30,3 +30,12 @@ dialog.modal pre{white-space:pre-wrap;word-break:break-all}
 .action-list{display:grid;gap:.5rem}.action-list button{margin:0;text-align:left}
 pre{overflow-x:auto}.table-scroll{overflow-x:auto}
 @media(max-width:700px){section{padding:1.25rem}.row{flex-direction:column;align-items:stretch;gap:.5rem}.row-actions{justify-content:flex-start}.field-row{flex-direction:column;gap:0}.field-row>label.narrow{flex:auto}}
+/* Run results */
+dialog.modal.wide{width:min(820px,calc(100vw - 2rem))}
+.output-block{margin-top:.75rem}.output-head{display:flex;justify-content:space-between;align-items:center;font-size:.75rem;text-transform:uppercase;letter-spacing:.05em;color:#5f6368;margin-bottom:.25rem}
+pre.output{margin:0;background:#1e2124;color:#e8eaed;border-radius:8px;padding:.75rem;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.8rem;line-height:1.45;max-height:50vh;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere}
+pre.output.stderr{background:#2a1d1d;color:#f6c7c3}.empty-output{color:#9aa0a6;font-style:italic}
+.running{color:#5f6368}.running::before{content:'';display:inline-block;width:.8em;height:.8em;margin-right:.5em;border:2px solid #c4c7c5;border-top-color:#1a73e8;border-radius:50%;animation:spin 1s linear infinite;vertical-align:-.1em}
+@keyframes spin{to{transform:rotate(360deg)}}@media(prefers-reduced-motion:reduce){.running::before{animation:none}}
+label.check{display:flex;align-items:center;gap:.5rem}label.check input{width:auto;margin:0}
+#confirm-result h3{margin:1rem 0 .5rem}

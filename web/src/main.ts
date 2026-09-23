@@ -214,6 +214,7 @@ async function commandsPage(){
       (c.enabled?'':pill('Disabled','warn'))+(c.commandKey?pill('Capability installed','ok'):pill('No capability'))+
       (c.level===5?pill(c.hasExecutionPassword?'Password set':'Password not set',c.hasExecutionPassword?'ok':'bad'):'')+
       (c.level>=3&&c.integrityVerification!=='active'?pill('Blocked: no active verifier','bad'):'')+'</div>',
+    '<button class="small primary" data-run-command="'+c.id+'"'+(!c.enabled?' disabled title="The command is disabled"':!c.commandKey?' disabled title="Install the SSH capability first"':'')+'>Run</button>'+
     '<button class="small" data-edit-command="'+c.id+'">Edit</button>'+
     (c.level===5?'<button class="small" data-set-level5="'+c.id+'">Password</button>':'')+
     (c.commandKey?'<button class="small" data-delete-command-key="'+c.id+'">Uninstall</button>':'<button class="small" data-create-command-key="'+c.id+'">Install</button>')+
@@ -236,14 +237,16 @@ async function commandsPage(){
       '<label>Content<textarea name="content" rows="8" required spellcheck="false" class="mono" placeholder="Shell command or Bash script"'+dis+'>'+escapeHtml(c?.content??'')+'</textarea></label>'+
       (locked?'<p class="hint">The SSH capability is installed, so target, type and content are locked. Uninstall it to change them.</p>':'')+
       '<label>Level<select name="level">'+[1,2,3,4,5].map(l=>'<option value="'+l+'"'+(l===(c?.level??1)?' selected':'')+'>'+l+' — '+LEVELS[l]+'</option>').join('')+'</select></label>'+
-      (c?.level===5?'<p class="hint">Moving this command off level 5 clears its execution password.</p>':'');};
-  const commandBody=(form:HTMLFormElement)=>{const f=new FormData(form); const body:Record<string,unknown>={name:f.get('name'),description:f.get('description'),level:Number(f.get('level'))};
+      (c?.level===5?'<p class="hint">Moving this command off level 5 clears its execution password.</p>':'')+
+      '<label class="check"><input type="checkbox" name="showOutputOnApproval"'+(c?.showOutputOnApproval?' checked':'')+'> Show output after approval (levels 4–5)</label><p class="hint">Levels 1–3 always show their output when run from here. For levels 4–5, the approval page and Run show only the exit code unless this is on. The MCP client always gets the full result.</p>';};
+  const commandBody=(form:HTMLFormElement)=>{const f=new FormData(form); const body:Record<string,unknown>={name:f.get('name'),description:f.get('description'),level:Number(f.get('level')),showOutputOnApproval:f.get('showOutputOnApproval')==='on'};
     for(const k of ['targetId','type','content'])if(f.has(k))body[k]=f.get(k); // disabled fields are absent
     return body;};
   on('#new-command',()=>formDialog('New command',commandFields(),'Create command',async form=>{
     await api('/api/commands',{method:'POST',body:JSON.stringify(commandBody(form))}); commandsPage();}));
   on('[data-edit-command]',b=>{const c=cs.find(x=>x.id===b.dataset.editCommand); if(!c)return;
     formDialog('Edit command',commandFields(c),'Save',async form=>{await api('/api/commands/'+c.id,{method:'PATCH',body:JSON.stringify(commandBody(form))}); commandsPage();});});
+  on('[data-run-command]',b=>{const c=cs.find(x=>x.id===b.dataset.runCommand); if(c)runCommand({...c,targetName:targetName(c.targetId)});});
   on('[data-set-level5]',b=>{const c=cs.find(x=>x.id===b.dataset.setLevel5); if(!c)return;
     formDialog((c.hasExecutionPassword?'Change':'Set')+' execution password','<p class="hint">Level 5 commands run only after this password is entered on the confirmation page.</p><label>Password<input name="password" type="password" minlength="12" maxlength="1024" required autocomplete="new-password"></label><label>Repeat password<input name="repeat" type="password" required autocomplete="new-password"></label>','Save',async form=>{
       const f=new FormData(form); if(f.get('password')!==f.get('repeat'))throw new Error('The passwords do not match.');
@@ -274,7 +277,46 @@ async function historyPage(){
   document.querySelector('#history-refresh')!.addEventListener('click',async()=>{const search=(document.querySelector<HTMLInputElement>('#history-search')!.value||'');const level=(document.querySelector<HTMLSelectElement>('#history-level')!.value||'');const r=await api('/api/history/executions?'+new URLSearchParams({...(search?{search}:{}),...(level?{level}:{} )}).toString());const box=document.querySelector('#execution-history')!;box.innerHTML=(r.executions as any[]).map(x=>'<article class="item"><strong>'+escapeHtml(x.commandName)+'</strong><small>Level '+x.level+' · '+escapeHtml(x.clientId)+' · '+new Date(x.startedAt).toLocaleString()+'</small><small>'+escapeHtml(x.status)+' · exit '+escapeHtml(String(x.exitCode))+' · '+x.durationMs+' ms</small><details><summary>Output</summary><pre>'+escapeHtml(x.stdout)+'</pre>'+(x.stderr?'<pre>'+escapeHtml(x.stderr)+'</pre>':'')+'</details></article>').join('');});
   document.querySelector('#shell-load')!.addEventListener('click',async()=>{const target=(document.querySelector<HTMLSelectElement>('#shell-target')!).value;try{const r=await api('/api/history/shell?targetId='+encodeURIComponent(target));document.querySelector('#shell-output')!.textContent=r.stdout+(r.stderr?'\\n[stderr]\\n'+r.stderr:'');}catch(err){document.querySelector('#shell-error')!.textContent=(err as Error).message;}});
 }
-async function confirmPage(token:string) { const info=await api('/api/confirm/'+encodeURIComponent(token)); const needsPassword=info.command.confirmation==='password'; shell('Confirm execution','<article><h2>'+escapeHtml(info.command.name)+'</h2><p>'+escapeHtml(info.command.description)+'</p><p>Level '+info.command.level+' · '+escapeHtml(info.clientName)+'</p>'+(needsPassword?'<form id="confirm-form"><label>Execution password<input name="password" type="password" autocomplete="current-password" required></label><button>Execute command</button></form>':'<button id="confirm-button">Approve & execute</button>')+'<p id="confirm-error"></p></article>'); const submit=async(password?:string)=>{try{const result=await api('/api/confirm/'+encodeURIComponent(token),{method:'POST',body:JSON.stringify(password===undefined?{}:{password})}); alert('Command executed. Exit code: '+result.exitCode); render();}catch(err){document.querySelector('#confirm-error')!.textContent=(err as Error).message;}}; if(needsPassword)document.querySelector<HTMLFormElement>('#confirm-form')!.onsubmit=async e=>{e.preventDefault();const f=new FormData(e.currentTarget as HTMLFormElement);await submit(String(f.get('password')??''));}; else document.querySelector('#confirm-button')!.addEventListener('click',()=>submit()); }
+/** Exit status, duration and (unless hidden) stdout/stderr of one execution. */
+function resultView(r:any):string{
+  const status=r.signal==='TIMEOUT'?pill('Timed out','bad'):r.exitCode===0?pill('Exit 0','ok'):pill('Exit '+(r.exitCode??'none')+(r.signal?' · '+r.signal:''),'bad');
+  const block=(label:string,text:string,cls:string)=>'<div class="output-block"><div class="output-head"><span>'+label+'</span>'+(text?'<button type="button" class="small" data-copy-output>Copy</button>':'')+'</div><pre class="output '+cls+'">'+(text?escapeHtml(text):'<span class="empty-output">(no output)</span>')+'</pre></div>';
+  return '<div class="pills">'+status+pill((r.durationMs/1000).toFixed(r.durationMs<10_000?2:1)+' s')+(r.truncated?pill('Output truncated','warn'):'')+'</div>'+
+    (r.outputHidden?'<p class="hint">Output is not shown after approval for this command (see “Show output after approval” in its settings). It is still recorded in History.</p>'
+      :block('stdout',r.stdout??'','stdout')+(r.stderr?block('stderr',r.stderr,'stderr'):''));
+}
+function bindCopyButtons(root:ParentNode){root.querySelectorAll<HTMLButtonElement>('[data-copy-output]').forEach(b=>b.onclick=async()=>{const text=b.closest('.output-block')?.querySelector('pre')?.textContent??'';try{await navigator.clipboard.writeText(text);b.textContent='Copied';}catch{b.textContent='Copy failed';}});}
+function resultDialog(c:any,r:any){const d=openDialog(c.name,resultView(r)+'<div class="dialog-actions"><button data-dialog-close>Close</button></div>');d.classList.add('wide');bindCopyButtons(d);}
+/** Web Run: levels 1-3 run at once; level 4 asks for confirmation and level 5 for the execution password first. */
+function runCommand(c:any){
+  const run=async(body:Record<string,unknown>)=>api('/api/commands/'+c.id+'/run',{method:'POST',body:JSON.stringify(body)});
+  if(c.level<=3){
+    const d=openDialog(c.name,'<p class="running">Running on '+escapeHtml(c.targetName??'the target')+'…</p><div class="dialog-actions"><button data-dialog-close>Close</button></div>'); d.classList.add('wide');
+    run({}).then(r=>{if(d.open){d.querySelector('.running')!.outerHTML=resultView(r);bindCopyButtons(d);}},err=>{if(d.open)d.querySelector('.running')!.outerHTML='<p class="dialog-error">'+escapeHtml((err as Error).message)+'</p>';});
+    return;
+  }
+  const output=c.showOutputOnApproval?'The output is shown when it finishes.':'Only the exit code is shown when it finishes (output after approval is off for this command).';
+  formDialog('Run '+c.name,'<p class="warning">Level '+c.level+' · '+escapeHtml(LEVELS[c.level]!)+'. This runs the command on the target now.</p><p class="hint">'+output+'</p>'+
+    (c.level===5?'<label>Execution password<input name="password" type="password" required autocomplete="current-password"></label>':''),'Run',async form=>{
+      const r=await run(c.level===5?{password:new FormData(form).get('password')}:{confirmed:true}); setTimeout(()=>resultDialog(c,r));});
+}
+async function confirmPage(token:string) {
+  let info:any; try{info=await api('/api/confirm/'+encodeURIComponent(token));}catch(err){shell('Confirm execution','<p class="warning">'+escapeHtml((err as Error).message)+'</p>');return;}
+  const needsPassword=info.command.confirmation==='password';
+  shell('Confirm execution','<article><h2>'+escapeHtml(info.command.name)+'</h2><p>'+escapeHtml(info.command.description)+'</p><div class="pills">'+pill('Level '+info.command.level+' · '+LEVELS[info.command.level],info.command.level>=5?'bad':'warn')+pill('Requested by '+info.clientName)+'</div>'+
+    '<p class="hint">'+(info.command.showOutputOnApproval?'The output is shown here when the command finishes.':'Only the exit code is shown here; the MCP client receives the full result.')+'</p>'+
+    '<form id="confirm-form">'+(needsPassword?'<label>Execution password<input name="password" type="password" autocomplete="current-password" required></label>':'')+'<button class="primary">'+(needsPassword?'Execute command':'Approve & execute')+'</button></form><p id="confirm-error" class="dialog-error"></p><div id="confirm-result"></div></article>');
+  const form=document.querySelector<HTMLFormElement>('#confirm-form')!;
+  form.onsubmit=async e=>{
+    e.preventDefault(); const button=form.querySelector('button')!; button.disabled=true; button.textContent='Running…';
+    const password=needsPassword?String(new FormData(form).get('password')??''):undefined;
+    try{
+      const r=await api('/api/confirm/'+encodeURIComponent(token),{method:'POST',body:JSON.stringify(password===undefined?{}:{password})});
+      form.remove(); document.querySelector('#confirm-error')!.textContent='';
+      const out=document.querySelector<HTMLElement>('#confirm-result')!; out.innerHTML='<h3>Executed</h3>'+resultView(r)+'<p class="hint">The result was also sent to '+escapeHtml(info.clientName)+'.</p>'; bindCopyButtons(out);
+    }catch(err){document.querySelector('#confirm-error')!.textContent=(err as Error).message; button.disabled=false; button.textContent=needsPassword?'Execute command':'Approve & execute';}
+  };
+}
 function settings() {
   shell('Account settings', '<form id="settings-form"><label>Name<input name="name" required value="'+escapeHtml(user!.name)+'"></label><label>Email<input name="email" type="email" required value="'+escapeHtml(user!.email ?? '')+'"></label><button>Save</button></form><p id="message"></p>');
   document.querySelector<HTMLFormElement>('#settings-form')!.onsubmit = async e => {

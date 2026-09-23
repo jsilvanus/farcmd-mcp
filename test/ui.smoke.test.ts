@@ -76,6 +76,10 @@ test('web UI: sign in, visit every page, toggle MCP access, sign out',{skip:!exi
     await page.locator('.row',{hasText:'Disk usage'}).getByRole('button',{name:'Edit'}).click();
     await dialog.locator('select[name=level]').selectOption('2'); await dialog.getByRole('button',{name:'Save'}).click();
     await page.locator('.row',{hasText:'Disk usage'}).getByText('Level 2 · Low-impact').waitFor();
+    assert.equal(await page.locator('.row',{hasText:'Disk usage'}).getByRole('button',{name:'Run'}).isDisabled(),true,'Run needs an installed capability');
+    await page.locator('.row',{hasText:'Disk usage'}).getByRole('button',{name:'Edit'}).click();
+    await dialog.getByLabel('Show output after approval (levels 4–5)').check(); await dialog.getByRole('button',{name:'Save'}).click();
+    await dialog.waitFor({state:'detached'});
     if(process.env.FARCMD_UI_SCREENSHOTS)await page.screenshot({path:join(process.env.FARCMD_UI_SCREENSHOTS,'commands.png'),fullPage:true});
     for(const [link,heading] of [['SSH',/SSH/],['Commands',/Commands/],['OAuth Sources',/OAuth Sources/],['History',/History/],['Audit',/Audit log/],['Settings',/Settings|Account/],['Dashboard',/Dashboard/]] as const){
       await page.getByRole('link',{name:link,exact:true}).click();

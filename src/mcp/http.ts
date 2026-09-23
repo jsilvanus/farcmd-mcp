@@ -6,6 +6,7 @@ import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { createMcpServer } from './server.js';
 import type { FarcmdConnector } from '../connector.js';
 import { verifyBearerToken } from '../auth.js';
+import { deliverElicitationResponse, rememberClientCapabilities } from './elicitation.js';
 
 export interface McpHttpOptions {
   connector: FarcmdConnector;
@@ -37,13 +38,23 @@ export async function mountMcpHttp(app: FastifyInstance, options: McpHttpOptions
       }
     }
 
+    const userId=typeof authInfo?.extra?.userId==='string'?authInfo.extra.userId:undefined;
+    const messages:any[]=Array.isArray(request.body)?request.body:[request.body];
+    // Capabilities arrive only with initialize; later (stateless) requests look them up.
+    if(userId&&authInfo)for(const m of messages)if(m?.method==='initialize')rememberClientCapabilities(userId,authInfo.clientId,m.params?.capabilities);
+    // A client's answer to an elicitation farcmd sent on another request's stream (see elicitation.ts).
+    if(messages.length>0&&messages.every(m=>deliverElicitationResponse(m,userId,authInfo?.clientId)))return reply.code(202).send();
+
     const visibleLevels=authInfo&&typeof authInfo.extra?.userId==='string'?options.connector.visibleLevels({userId:authInfo.extra.userId,clientId:authInfo.clientId,accessToken:authInfo.token}):[];
-    const server = createMcpServer({connector:options.connector,publicUrl:options.publicUrl,visibleLevels});
     const transport = new StreamableHTTPServerTransport({});
+    const closed = new AbortController();
+    const server = createMcpServer({connector:options.connector,publicUrl:options.publicUrl,visibleLevels,connectionSignal:closed.signal,
+      sendRelated:(message,relatedRequestId)=>transport.send(message as any,{relatedRequestId})});
     await server.connect(transport as unknown as Transport);
 
     reply.hijack();
     reply.raw.on('close', () => {
+      closed.abort();
       transport.close().catch(() => undefined);
       server.close().catch(() => undefined);
     });
