@@ -3,3 +3,30 @@ body{font-family:system-ui,sans-serif;background:#f6f7f9;margin:0;color:#202124}
 #verifier-script{white-space:pre-wrap;word-break:break-all;max-height:60vh;overflow:auto}
 table.audit{border-collapse:collapse;width:100%;font-size:.85rem}table.audit td,table.audit th{border-bottom:1px solid #ddd;padding:.3rem;text-align:left;vertical-align:top}table.audit td:last-child{word-break:break-word;max-width:40ch}
 #mcp-access{margin:0 0 1.5rem;padding:1.2rem}#mcp-access h2{margin:0 0 .5rem;font-size:1.1rem}#mcp-access .ok strong{color:#137333}#mcp-access .warn strong{color:#b3261e}
+/* Lists with row actions (SSH, Commands) and modal dialogs */
+header{flex-wrap:wrap;gap:1rem}nav{flex-wrap:wrap}nav button{margin-top:0}
+section article+article{margin-top:2rem}
+.section-head{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:.5rem 1rem;margin-bottom:.5rem}.section-head h2{margin:0;font-size:1.2rem}
+.hint{color:#5f6368;font-size:.85rem;margin:.4rem 0 .8rem}.empty{color:#5f6368;border:1px dashed #d5d8dd;border-radius:8px;padding:1rem;text-align:center}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.8rem}
+.rows{list-style:none;margin:0;padding:0;border:1px solid #e3e5e8;border-radius:10px}
+.row{display:flex;align-items:center;gap:1rem;padding:.7rem 1rem;border-top:1px solid #e3e5e8}.row:first-child{border-top:0}
+.row-main{flex:1;min-width:0;display:grid;gap:.2rem}.row-main small{color:#5f6368;overflow-wrap:anywhere}
+.row-actions{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:.35rem}
+.pills{display:flex;flex-wrap:wrap;gap:.3rem;margin-top:.15rem}
+.pill{font-size:.72rem;line-height:1.5;padding:0 .5rem;border-radius:999px;background:#eef0f2;color:#3c4043;white-space:nowrap}
+.pill.ok{background:#e6f4ea;color:#137333}.pill.warn{background:#fef3e0;color:#9a5b00}.pill.bad{background:#fce8e6;color:#b3261e}
+button.small{margin:0;padding:.3rem .65rem;font-size:.8rem;border-radius:6px;background:#eef0f2;color:#202124;white-space:nowrap}
+button.small:hover{background:#e2e5e8}button:disabled{opacity:.5;cursor:not-allowed}
+button.primary{background:#1a73e8;color:#fff}button.primary:hover{background:#1765cc}
+button.danger{color:#b3261e}
+dialog.modal{border:0;border-radius:14px;padding:1.5rem;width:min(560px,calc(100vw - 2rem));box-sizing:border-box;box-shadow:0 20px 60px rgba(0,0,0,.25)}
+dialog.modal::backdrop{background:rgba(32,33,36,.45)}
+dialog.modal h2{margin:0 0 .5rem;font-size:1.2rem}dialog.modal form>label:first-child{margin-top:.5rem}dialog.modal input{font:inherit}
+dialog.modal pre{white-space:pre-wrap;word-break:break-all}
+.field-row{display:flex;gap:.75rem}.field-row>label{flex:1;min-width:0}.field-row>label.narrow{flex:0 0 7rem}
+.dialog-actions{display:flex;justify-content:flex-end;gap:.5rem;margin-top:1rem}.dialog-actions button{margin:0}
+.dialog-error{color:#b00020;min-height:1.2rem;margin:.5rem 0 0}
+.action-list{display:grid;gap:.5rem}.action-list button{margin:0;text-align:left}
+pre{overflow-x:auto}.table-scroll{overflow-x:auto}
+@media(max-width:700px){section{padding:1.25rem}.row{flex-direction:column;align-items:stretch;gap:.5rem}.row-actions{justify-content:flex-start}.field-row{flex-direction:column;gap:0}.field-row>label.narrow{flex:auto}}
