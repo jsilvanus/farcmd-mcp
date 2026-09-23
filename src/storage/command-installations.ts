@@ -3,7 +3,8 @@ import type { DatabaseSync } from 'node:sqlite';
 export interface CommandInstallationRecord {
   id:string; userId:string; commandId:string; targetId:string; masterKeyId:string;
   encryptedPrivateKey:string; publicKey:string; fingerprint:string;
-  remoteScriptPath:string; authorizedKeyLine:string; installedAt?:number; createdAt:number; updatedAt:number;
+  remoteScriptPath:string; authorizedKeyLine:string; scriptContent?:string; commandSha256?:string; scriptSha256?:string; authorizedKeySha256?:string;
+  installedAt?:number; createdAt:number; updatedAt:number;
 }
 
 export class SqliteCommandInstallationStore {
@@ -19,13 +20,17 @@ export class SqliteCommandInstallationStore {
     return rows.map(this.map).filter((x):x is CommandInstallationRecord=>x!==undefined);
   }
   create(r:CommandInstallationRecord):void{
-    this.db.prepare('INSERT INTO command_installations (id,user_id,command_id,target_id,master_key_id,encrypted_private_key,public_key,fingerprint,remote_script_path,authorized_key_line,installed_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)').run(r.id,r.userId,r.commandId,r.targetId,r.masterKeyId,r.encryptedPrivateKey,r.publicKey,r.fingerprint,r.remoteScriptPath,r.authorizedKeyLine,r.installedAt??null,r.createdAt,r.updatedAt);
+    this.db.prepare('INSERT INTO command_installations (id,user_id,command_id,target_id,master_key_id,encrypted_private_key,public_key,fingerprint,remote_script_path,authorized_key_line,script_content,command_sha256,script_sha256,authorized_key_sha256,installed_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run(r.id,r.userId,r.commandId,r.targetId,r.masterKeyId,r.encryptedPrivateKey,r.publicKey,r.fingerprint,r.remoteScriptPath,r.authorizedKeyLine,r.scriptContent??null,r.commandSha256??null,r.scriptSha256??null,r.authorizedKeySha256??null,r.installedAt??null,r.createdAt,r.updatedAt);
   }
   delete(userId:string,id:string):void{this.db.prepare('DELETE FROM command_installations WHERE user_id=? AND id=?').run(userId,id);}
   private map=(r:any):CommandInstallationRecord|undefined=>r?{
     id:r.id,userId:r.user_id,commandId:r.command_id,targetId:r.target_id,masterKeyId:r.master_key_id,
     encryptedPrivateKey:r.encrypted_private_key,publicKey:r.public_key,fingerprint:r.fingerprint,
     remoteScriptPath:r.remote_script_path,authorizedKeyLine:r.authorized_key_line,
+    ...(r.script_content!==null&&r.script_content!==undefined?{scriptContent:r.script_content}:{}),
+    ...(r.command_sha256?{commandSha256:r.command_sha256}:{}),
+    ...(r.script_sha256?{scriptSha256:r.script_sha256}:{}),
+    ...(r.authorized_key_sha256?{authorizedKeySha256:r.authorized_key_sha256}:{}),
     ...(r.installed_at!==null&&r.installed_at!==undefined?{installedAt:r.installed_at}:{}),
     createdAt:r.created_at,updatedAt:r.updated_at
   }:undefined;
