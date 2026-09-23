@@ -5,6 +5,7 @@ import { fetchCimdMetadata, isCimdClientId } from './cimd.js';
 import { randomToken, verifyS256 } from './pkce.js';
 import { issueAccessToken } from './jwt.js';
 import { REFRESH_TOKEN_LIFETIME_MS } from './tokens.js';
+import { contentSecurityPolicy, redirectSource } from '../csp.js';
 
 const LEVELS=[1,2,3,4,5] as const;
 
@@ -38,7 +39,8 @@ export async function mountAuthorizationServer(app:FastifyInstance,issuer:string
    metadata=await validateRequest(q);
   }catch{return reply.code(400).type('text/html').send(page('Invalid request','<h1>Invalid authorization request</h1>'));}
   const user=users.getUser(userId);if(!isActiveUser(user))return reply.code(401).type('text/html').send(page('Invalid account','<h1>Invalid account</h1>'));
-  if(body.action===undefined){const session=randomToken();const oauthValue=typeof body.oauth==='string'?body.oauth:(body.session?authStore.oauthTokens().getLoginSession(String(body.session))?.oauth:undefined);if(!oauthValue)return reply.code(400).type('text/html').send(page('Invalid request','<h1>Invalid authorization session</h1>'));authStore.oauthTokens().saveLoginSession(session,{userId:user.id,oauth:oauthValue,expires:Date.now()+5*60_000});const grant=authStore.getOAuthGrant(user.id,q.client_id!);const levels=grant?.visibleLevels??[1,2,3];return reply.type('text/html').send(consentPage(session,user.name,metadata.client_name,levels,!!grant?.level5PermanentlyHidden));}
+  if(body.action===undefined){const session=randomToken();const oauthValue=typeof body.oauth==='string'?body.oauth:(body.session?authStore.oauthTokens().getLoginSession(String(body.session))?.oauth:undefined);if(!oauthValue)return reply.code(400).type('text/html').send(page('Invalid request','<h1>Invalid authorization session</h1>'));authStore.oauthTokens().saveLoginSession(session,{userId:user.id,oauth:oauthValue,expires:Date.now()+5*60_000});const grant=authStore.getOAuthGrant(user.id,q.client_id!);const levels=grant?.visibleLevels??[1,2,3];// The consent form's response redirects to the client, so form-action must allow its redirect_uri.
+  reply.header('Content-Security-Policy',contentSecurityPolicy([redirectSource(q.redirect_uri!)]));return reply.type('text/html').send(consentPage(session,user.name,metadata.client_name,levels,!!grant?.level5PermanentlyHidden));}
   if(!body.session)return reply.code(400).type('text/html').send(page('Invalid session','<h1>Invalid authorization session</h1>'));
   if(!authStore.oauthTokens().consumeLoginSession(String(body.session)))return reply.code(400).type('text/html').send(page('Expired session','<h1>Authorization session expired</h1>'));
   const target=new URL(q.redirect_uri!);target.searchParams.set('iss',issuer);if(q.state)target.searchParams.set('state',q.state);

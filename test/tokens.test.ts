@@ -131,6 +131,7 @@ test('authorization flow: sign-in session is kept in SQLite, survives a restart 
     const signIn=await app1.inject({method:'POST',url:'/oauth/authorize',payload:{oauth,email:'o@example.test',password}});
     assert.equal(signIn.statusCode,200,signIn.body);
     const session=/name="session" value="([^"]+)"/.exec(signIn.body)![1]!;
+    assert.match(String(signIn.headers['content-security-policy']),/form-action 'self' https:\/\/93\.184\.215\.14(;|$)/,'the consent form may redirect to the client');
     assert.equal((f.db.prepare('SELECT COUNT(*) AS n FROM oauth_login_sessions').get() as any).n,1);
     assert.ok(!JSON.stringify(f.db.prepare('SELECT * FROM oauth_login_sessions').all()).includes(session),'only the hash is stored');
     // The server restarts between sign-in and consent: a fresh process (app2) still knows the session.
