@@ -26,6 +26,7 @@ import { SqliteExecutionStore } from './execution.js';
 import { isCommandLevel } from './command-levels.js';
 import { AuditLog, type AuditOutcome } from './audit.js';
 import { createHash } from 'node:crypto';
+import { hashToken } from './oauth/tokens.js';
 
 const confirmationAttempts=new Map<string,{count:number;reset:number}>();
 function confirmationRateLimit(key:string):boolean{return rateLimit(key,5,15*60_000,confirmationAttempts);}
@@ -73,7 +74,7 @@ declare module 'fastify' { interface FastifyRequest { auditUserId?:string|undefi
 
 /** Audited web API routes: "<METHOD> <route pattern>" -> [event, target type]. Every mutating /api/ route must be listed. */
 export const AUDITED_ROUTES:Record<string,[string,string|undefined]>={
-  'POST /api/auth/login':['auth.login','user'],'POST /api/auth/logout':['auth.logout','user'],'POST /api/auth/register':['auth.register','user'],'PATCH /api/account':['account.update','user'],
+  'POST /api/auth/login':['auth.login','user'],'POST /api/auth/logout':['auth.logout','user'],'POST /api/auth/register':['auth.register','user'],'PATCH /api/account':['account.update','user'],'POST /api/account/password':['account.password_change','user'],
   'POST /api/ssh/keys/generate':['ssh_key.generate','ssh_key'],'POST /api/ssh/keys':['ssh_key.upload','ssh_key'],'PATCH /api/ssh/keys/:id':['ssh_key.update','ssh_key'],
   'POST /api/ssh/keys/:id/unlock':['ssh_key.unlock','ssh_key'],'POST /api/ssh/keys/:id/lock':['ssh_key.lock','ssh_key'],'DELETE /api/ssh/keys/:id':['ssh_key.delete','ssh_key'],
   'POST /api/ssh/targets':['ssh_target.create','ssh_target'],'PATCH /api/ssh/targets/:id':['ssh_target.update','ssh_target'],'DELETE /api/ssh/targets/:id':['ssh_target.delete','ssh_target'],
@@ -386,5 +387,21 @@ export async function mountWebApi(app:FastifyInstance, users:UserStore, sessionS
     if(other&&other.id!==user.id) return reply.code(409).send({error:'That email is already in use'});
     users.updateUser(user.id,name,email);
     return {user:publicUser(users.getUser(user.id)!)};
+  });
+  // Self-service password change: needs the current password; ends every other web session and all OAuth refresh tokens.
+  app.post('/api/account/password',async (request,reply)=>{
+    const user=await requireUser(request,reply,users,sessions); if(!user)return;
+    if(!rateLimit('password-change:'+user.id,5,15*60_000)) return reply.code(429).send({error:'Too many attempts. Try again later.'});
+    const b=(request.body??{}) as Record<string,unknown>;
+    const current=typeof b.currentPassword==='string'?b.currentPassword:''; const next=typeof b.newPassword==='string'?b.newPassword:'';
+    if(!(await verifyPassword(user.passwordHash,current))) return reply.code(400).send({error:'The current password is incorrect.'});
+    if(next.length<12||next.length>1024) return reply.code(400).send({error:'The new password must be 12-1024 characters.'});
+    if(next===current) return reply.code(400).send({error:'Choose a password different from the current one.'});
+    sshDb.prepare('UPDATE users SET password_hash=? WHERE id=?').run(await hash(next,{algorithm:2}),user.id);
+    const keep=hashToken(request.cookies.farcmd_session??'');
+    const sessionsEnded=Number(sshDb.prepare('DELETE FROM web_sessions WHERE user_id=? AND token<>?').run(user.id,keep).changes);
+    const refreshTokensRevoked=Number(sshDb.prepare('DELETE FROM refresh_tokens WHERE subject=?').run(user.id).changes);
+    sshDb.prepare('DELETE FROM authorization_codes WHERE subject=?').run(user.id);
+    return {ok:true,sessionsEnded,refreshTokensRevoked};
   });
 }

@@ -95,7 +95,7 @@ const auto=page.getByRole('button',{name:/automatic/i}); if(await auto.count()){
 await nav('OAuth Sources'); await shot('oauth');
 await nav('History'); await shot('history');
 await nav('Audit'); await shot('audit');
-await nav('Settings'); await shot('settings',false);
+await nav('Settings'); await shot('settings');
 // Phone width.
 await page.setViewportSize({width:390,height:844}); await nav('Commands'); await page.locator('.row').first().waitFor(); await shot('commands-mobile');
 await browser.close(); await app.close(); rmSync(dir,{recursive:true,force:true});

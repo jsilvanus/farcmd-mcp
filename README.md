@@ -262,9 +262,9 @@ After signing in you land on **Commands**. The navigation bar has these pages:
 | **Commands** | The **MCP access** bar at the top turns MCP off or on for your account. Create, edit, enable/disable and delete commands (name, description, target, level, *shell command* or *Bash script*). Install or remove each command's SSH capability, set the level-5 execution password, choose **Show output after approval** (levels 4–5), and **Run** a command directly from the browser. |
 | **SSH** | **Master keys**: generate or upload (optionally passphrase-protected), unlock for 15 minutes, lock, rename, delete. **Targets**: host, port, account, master key and pinned **host fingerprint** (the connection test shows the fingerprint the server presents; unknown hosts are never trusted silently). **Integrity verifier** per target: install/repair automatically, download a manual root install script, verify now, remove. **Remote cleanup ledger**: capabilities that could not be removed yet, with a retry. |
 | **OAuth Sources** | Every MCP client you have authorized: last use, visible levels, permanently hide level 5, revoke. |
-| **History** | MCP and web executions with client, exit status, duration and output, plus per-command counts. A human-only view of a target's remote **shell history** (read with the master key). |
-| **Audit** | Your audit events, with filters by event, outcome and text, and **Verify integrity** for the HMAC chain. |
-| **Settings** | Name and email. Passwords are changed by the operator with `farcmd-admin user password`. |
+| **History** | Every run, from MCP clients and from the web UI's Run, with source, level, exit status and duration, and output on request. Filter by text, level and source, and load more runs as needed. Also shows successful runs per command and a human-only view of a target's remote **shell history** (read with the master key). |
+| **Audit** | Your audit events, 50 per page and grouped by day, with filters by event, outcome and text, and **Verify integrity** for the HMAC chain. |
+| **Settings** | Name and email, and **change password**. Changing the password requires the current one and signs out your other sessions. MCP clients must be authorized again within the hour. |
 
 **Approval page.** The `approvalUrl` of a level 4/5 request opens `/?page=confirm&token=…`. It shows the command, level, requesting client and expiry. Only the signed-in owner can approve (level 5 also asks for the execution password) or decline. An approval runs the command once.
 
@@ -296,7 +296,7 @@ farcmd-admin audit verify
 
 - Passwords are never accepted as arguments, because they would end up in shell history and the process list. They are read from a hidden prompt, or from the first line of stdin with `--password-stdin`.
 - **Registration is off by default.** `farcmd-admin registration enable` shows a sign-up link in the web UI.
-- **farcmd never sends email.** The email address is only the sign-in name. farcmd doesn't verify it, has no "forgot password" link, and sends no notifications. The operator resets passwords with `farcmd-admin user password`, and people find level 4/5 approval requests through their MCP client or the link it shows them.
+- **farcmd never sends email.** The email address is only the sign-in name. farcmd doesn't verify it, has no "forgot password" link, and sends no notifications. Users change their own password on the Settings page, and the operator resets a forgotten one with `farcmd-admin user password`, and people find level 4/5 approval requests through their MCP client or the link it shows them.
 - `user delete` removes the user and all of their farcmd data, but not their audit entries. It refuses while the user still has capabilities or verifiers installed on remote hosts (remove those in the web UI first) unless `--force` is given.
 
 **MCP kill switches.** MCP works for a user only while all three switches allow it. The web UI, OAuth grants and tokens stay as they are, so turning MCP back on works immediately.

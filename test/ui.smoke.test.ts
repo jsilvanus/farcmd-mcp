@@ -89,11 +89,15 @@ test('web UI: sign in, visit every page, toggle MCP access, sign out',{skip:!exi
       await page.getByRole('link',{name:link,exact:true}).click();
       await page.getByRole('heading',{name:heading}).first().waitFor();
     }
+    // Settings (the last page visited): self-service password change.
+    await page.fill('#current-password',PASSWORD); await page.fill('#new-password','a different long password'); await page.fill('#repeat-password','a different long password');
+    await page.getByRole('button',{name:'Change password'}).click(); await page.getByText('Password changed.').waitFor();
+    await page.getByRole('link',{name:'Audit',exact:true}).click(); await page.locator('.pager').first().getByText(/ of \d+/).waitFor();
     await page.getByRole('button',{name:'Log out'}).click();
     await page.getByRole('heading',{name:'Sign in'}).waitFor();
     assert.deepEqual(problems.filter(p=>!/401|Authentication required/.test(p)),[],'no script errors');
     const events=(db.prepare("SELECT event||':'||outcome AS e FROM security_events WHERE actor='web' ORDER BY seq").all() as any[]).map(r=>r.e);
-    assert.deepEqual(events.filter(e=>/^(auth|mcp_access)\./.test(e)),['auth.login:failure','auth.login:success','mcp_access.update:success','mcp_access.update:success','auth.logout:success']);
+    assert.deepEqual(events.filter(e=>/^(auth|mcp_access|account)\./.test(e)),['auth.login:failure','auth.login:success','mcp_access.update:success','mcp_access.update:success','account.password_change:success','auth.logout:success']);
   }finally{
     await browser.close(); await app.close();
     if(savedUrl===undefined)delete process.env.MCP_PUBLIC_URL; else process.env.MCP_PUBLIC_URL=savedUrl;
