@@ -14,6 +14,7 @@ import { mountWebApi } from './web-api.js';
 import { SqliteAuthStore, SqliteUserStore } from './storage/sqlite.js';
 import { isActiveUser } from './storage/interface.js';
 import { auditRetentionMs } from './audit.js';
+import { SqliteExecutionHistoryStore, executionRetentionMs } from './execution-history.js';
 import { parseTrustProxy, productionConfigProblems } from './config.js';
 import { executionLimits } from './limits.js';
 import { contentSecurityPolicy } from './csp.js';
@@ -40,6 +41,9 @@ if(!existingDefault&&defaultUserPassword){users.createUser({id:process.env.MCP_D
 // Audit log retention (FARCMD_AUDIT_RETENTION_DAYS, default 365, 0 = keep forever): prune at start and daily.
 const retentionMs=auditRetentionMs();
 if(retentionMs>0){store.cleanupSecurityEvents(retentionMs);setInterval(()=>store.cleanupSecurityEvents(retentionMs),86_400_000).unref();}
+// Execution history retention (FARCMD_EXECUTION_RETENTION_DAYS, default 365, 0 = keep forever): runs and their output, pruned at start and daily.
+const executionRetention=executionRetentionMs();
+if(executionRetention>0){const history=new SqliteExecutionHistoryStore(store.getDatabase());history.prune(executionRetention);setInterval(()=>history.prune(executionRetention),86_400_000).unref();}
 const options:FastifyHttpOptions<Server>={logger:true,bodyLimit:256*1024,trustProxy:parseTrustProxy(process.env.FARCMD_TRUST_PROXY)};
 const app=Fastify(options);
 app.addHook('onSend',async(_request,reply,payload)=>{reply.header('X-Content-Type-Options','nosniff').header('X-Frame-Options','DENY').header('Referrer-Policy','no-referrer');if(process.env.NODE_ENV==='production')reply.header('Strict-Transport-Security','max-age=31536000; includeSubDomains');if(process.env.NODE_ENV==='production'&&!reply.hasHeader('Content-Security-Policy'))reply.header('Content-Security-Policy',contentSecurityPolicy());return payload;});

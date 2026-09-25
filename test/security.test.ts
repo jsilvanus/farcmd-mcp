@@ -279,3 +279,27 @@ test('CIMD fetches refuse private, reserved and IPv4-mapped addresses',async()=>
   for(const a of ['127.0.0.1','10.0.0.1','172.16.5.4','192.168.1.1','169.254.169.254','100.64.0.1','0.0.0.0','224.0.0.1','::','::1','fd00::1','fe80::1','::ffff:127.0.0.1','::ffff:a9fe:a9fe','64:ff9b::7f00:1','not-an-ip'])assert.equal(privateIp(a),true,a);
   for(const a of ['93.184.215.14','1.1.1.1','2606:4700:4700::1111','::ffff:8.8.8.8'])assert.equal(privateIp(a),false,a);
 });
+
+test('execution history retention removes old runs with their output and audits the removal per user',async()=>{
+  const f=fixture();
+  const previousKey=process.env.FARCMD_ENCRYPTION_KEY; process.env.FARCMD_ENCRYPTION_KEY=Buffer.alloc(32,9).toString('base64');
+  try{
+    const { executionRetentionMs }=await import('../src/execution-history.js');
+    const history=new SqliteExecutionHistoryStore(f.db); const day=86_400_000; const now=Date.now();
+    const run=(startedAt:number,stdout:string)=>history.create({id:randomUUID(),userId:f.userId,clientId:'c',commandId:randomUUID(),commandName:'n',targetId:'t',level:1,startedAt,endedAt:startedAt+1,durationMs:1,exitCode:0,stdout,stderr:'',status:'success'});
+    run(now-400*day,'old secret output'); run(now-10*day,'recent output');
+    assert.equal(history.prune(365*day,now),1);
+    const rows=JSON.stringify(f.db.prepare('SELECT * FROM execution_history').all());
+    assert.ok(!rows.includes('old secret output')&&rows.includes('recent output'));
+    const audited=f.db.prepare("SELECT user_id,details FROM security_events WHERE event='execution_history.pruned'").all() as any[];
+    assert.equal(audited.length,1); assert.equal(audited[0].user_id,f.userId); assert.equal(JSON.parse(audited[0].details).removed,1);
+    assert.equal(history.prune(365*day,now),0,'nothing left to prune, nothing audited');
+    assert.equal((f.db.prepare("SELECT COUNT(*) AS n FROM security_events WHERE event='execution_history.pruned'").get() as any).n,1);
+    const saved=process.env.FARCMD_EXECUTION_RETENTION_DAYS;
+    try{
+      delete process.env.FARCMD_EXECUTION_RETENTION_DAYS; assert.equal(executionRetentionMs(),365*day);
+      process.env.FARCMD_EXECUTION_RETENTION_DAYS='0'; assert.equal(executionRetentionMs(),0);
+      process.env.FARCMD_EXECUTION_RETENTION_DAYS='-1'; assert.throws(()=>executionRetentionMs());
+    }finally{if(saved===undefined)delete process.env.FARCMD_EXECUTION_RETENTION_DAYS;else process.env.FARCMD_EXECUTION_RETENTION_DAYS=saved;}
+  }finally{if(previousKey===undefined)delete process.env.FARCMD_ENCRYPTION_KEY;else process.env.FARCMD_ENCRYPTION_KEY=previousKey;cleanup(f);}
+});

@@ -137,7 +137,11 @@ docker run -d --name farcmd --restart unless-stopped \
 docker exec -it farcmd farcmd-admin user create --email you@example.org --name "You"
 ```
 
-Then point your reverse proxy at `http://127.0.0.1:5999` (the nginx example above works as is). Check the gateway address with `docker network inspect bridge -f '{{(index .IPAM.Config 0).Gateway}}'`. Back up `.env` somewhere safe, separately from the data volume.
+Then point your reverse proxy at `http://127.0.0.1:5999` (the nginx example above works as is).
+
+**Why `FARCMD_TRUST_PROXY` isn't `127.0.0.1` here:** nginx connects to `127.0.0.1:5999` on the host, but Docker forwards that connection into the container, and inside the container it arrives from the bridge gateway (usually `172.17.0.1`), not from `127.0.0.1`. With `127.0.0.1`, farcmd would ignore `X-Forwarded-For`. Every client would then look like the gateway: they would share one login rate-limit budget, and the audit log would show the wrong IP. Check the gateway with `docker network inspect bridge -f '{{(index .IPAM.Config 0).Gateway}}'`. Compose projects get their own network with a different gateway (see [`docs/deployment.md`](docs/deployment.md#behind-nginx)). `127.0.0.1` is right only when farcmd runs directly on the host, without Docker.
+
+Back up `.env` somewhere safe, separately from the data volume.
 
 To upgrade, pull the new image and recreate the container. The data stays in the `farcmd-data` volume:
 
@@ -180,6 +184,7 @@ Run it under systemd (or similar) as a dedicated unprivileged user, and make `.e
 | `PORT`, `HOST` | – | Listen address (default `0.0.0.0:5999`). |
 | `FARCMD_TRUST_PROXY` | behind a proxy | Proxies allowed to set `X-Forwarded-For`/`-Proto`: IPs/CIDRs, a hop count or `true`. |
 | `FARCMD_AUDIT_RETENTION_DAYS` | – | Audit log retention (default 365, `0` = forever). |
+| `FARCMD_EXECUTION_RETENTION_DAYS` | – | Execution history retention, stdout/stderr included (default 365, `0` = forever). |
 | `FARCMD_MAX_OUTPUT_BYTES` | – | Captured stdout/stderr per execution (default 262144). |
 | `FARCMD_SSH_MAX_CONCURRENT`, `FARCMD_SSH_MAX_PER_TARGET` | – | Concurrent SSH executions in total (8) and per target (2). |
 | `FARCMD_MCP_EXECUTIONS_PER_MINUTE` | – | New MCP executions per user and client per minute (default 30, `0` = off). |
@@ -339,7 +344,7 @@ farcmd is a remote-execution gateway: whoever controls it can run every installe
 
 - **The AI decides when to run levels 1–3.** A client that has been tricked by prompt injection (for example through a web page, an email or a command's own output) can run any level 1–3 command it can see, without asking. Put only commands you would let the model run unattended at those levels, and grant each client the fewest levels it needs.
 - **Command output goes to the AI provider.** stdout and stderr are returned to the MCP client and so reach its model provider. Don't expose commands that print secrets. Output can also carry prompt-injection text back into the conversation.
-- **Execution history is kept in plaintext and has no retention limit.** stdout/stderr of every run, the command content and the pending approval results are stored unencrypted in SQLite. Only the audit log is pruned. Protect the database and backups as sensitive data.
+- **Execution history is stored unencrypted.** The stdout/stderr of every run and the command content are kept in plaintext in SQLite. History is pruned after `FARCMD_EXECUTION_RETENTION_DAYS` (default 365). Lower that if your commands print sensitive data, and protect the database and backups as sensitive data. Results of approved level 4/5 runs that are waiting to be collected by the MCP client are deleted after a day.
 - **Anyone who has both the database and `FARCMD_ENCRYPTION_KEY` has every SSH key**, and anyone who has `JWT_SECRET` can mint access tokens. Both are passed in the environment, so they can be seen with `docker inspect` and in `/proc/<pid>/environ` by root or the service user. Restrict access to the host and to the Docker socket.
 - **Master keys are powerful.** A master key can write to `authorized_keys` on its targets. Use passphrase-protected master keys, keep them locked, or delete them after provisioning (existing commands keep working). The remote shell-history view also uses the master key.
 - **Levels 1–2 are not integrity-verified.** Someone who controls the target account could change those scripts. Put anything that matters at level 3 or higher.
@@ -358,6 +363,7 @@ A review before the 1.0.0 release led to these changes:
 - The OAuth consent sign-in form (`POST /oauth/authorize`) had **no password rate limit**, so the web login limit could be bypassed. It now shares the per-IP budget with `/api/auth/login`, and refusals are audited.
 - **Web session tokens were stored in plaintext** in SQLite, so a database copy gave usable sessions. They are now stored as SHA-256 hashes. Existing sessions are migrated in place and keep working, and expired sessions are purged.
 - The **CIMD SSRF filter** missed IPv4-mapped IPv6 (`::ffff:127.0.0.1`), NAT64, CGNAT (`100.64/10`), `::`, multicast and other reserved ranges. It now uses a `BlockList` and checks embedded IPv4 addresses.
+- **Execution history had no retention limit.** Runs and their output are now pruned after `FARCMD_EXECUTION_RETENTION_DAYS` (default 365, the same as the audit log), and each prune is audited as `execution_history.pruned`.
 - Password sign-in for an **unknown email** now takes as long as a wrong password (a dummy Argon2 check), so response time no longer reveals which accounts exist. The rate-limit table is also swept so it cannot grow without bound.
 
 ### Reporting a vulnerability
@@ -427,7 +433,7 @@ Details: [`docs/capability-integrity.md`](docs/capability-integrity.md).
 - **Recorded:** every state-changing web API call (one Fastify hook; a test fails if a mutating route is not mapped), OAuth consent, sign-in failures and token events, and MCP confirmations, refusals, integrity results and executions.
 - **Never recorded:** request bodies as a whole and secret-looking fields. Command content is reduced to its SHA-256.
 - **Tamper evidence:** `hash = HMAC-SHA256(K, previous hash ‖ entry)`, with `K` derived from `FARCMD_ENCRYPTION_KEY`. **Verify integrity** (or `farcmd-admin audit verify`) recomputes the chain. To detect truncation of the newest entries, compare against a head hash you noted earlier.
-- **Retention:** `FARCMD_AUDIT_RETENTION_DAYS` (default 365). Pruning records `audit.pruned` so the remaining chain still verifies.
+- **Retention:** `FARCMD_AUDIT_RETENTION_DAYS` (default 365). Pruning records `audit.pruned` so the remaining chain still verifies. Execution history has its own retention, `FARCMD_EXECUTION_RETENTION_DAYS` (default 365). Pruning it also lowers the per-command run counts on the History page. The `command.execute` audit entries are kept for the audit retention period.
 
 ---
 

@@ -1,5 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
 import type { CommandLevel } from './command-registry.js';
+import { AuditLog } from './audit.js';
 
 /** 'blocked' = refused before execution (e.g. failed integrity verification); nothing ran on the target. */
 export type ExecutionStatus='success'|'failed'|'timeout'|'blocked';
@@ -30,5 +31,25 @@ export class SqliteExecutionHistoryStore {
   }
   count(userId:string):number{return Number((this.db.prepare('SELECT COUNT(*) AS count FROM execution_history WHERE user_id=?').get(userId) as any).count);}
   successfulCounts(userId:string):Array<{commandId:string;commandName:string;level:CommandLevel;count:number}>{return (this.db.prepare("SELECT command_id,command_name,level,COUNT(*) AS count FROM execution_history WHERE user_id=? AND status='success' GROUP BY command_id,command_name,level ORDER BY count DESC,command_name ASC").all(userId) as any[]).map(r=>({commandId:r.command_id,commandName:r.command_name,level:r.level,count:Number(r.count)}));}
+  /**
+   * Remove runs that started more than maxAgeMs ago, output included. Each affected user gets one
+   * `execution_history.pruned` audit entry with the number of runs removed. Returns the total removed.
+   */
+  prune(maxAgeMs:number,now=Date.now()):number{
+    const cutoff=now-maxAgeMs;
+    const perUser=this.db.prepare('SELECT user_id,COUNT(*) AS n FROM execution_history WHERE started_at<? GROUP BY user_id').all(cutoff) as {user_id:string;n:number}[];
+    if(!perUser.length)return 0;
+    const removed=Number(this.db.prepare('DELETE FROM execution_history WHERE started_at<?').run(cutoff).changes);
+    const audit=new AuditLog(this.db); const retentionDays=Math.round(maxAgeMs/86_400_000);
+    for(const r of perUser)audit.record({event:'execution_history.pruned',actor:'system',userId:r.user_id,details:{removed:Number(r.n),retentionDays}});
+    return removed;
+  }
   private map=(r:any):ExecutionHistoryRecord=>({id:r.id,userId:r.user_id,clientId:r.client_id,commandId:r.command_id,commandName:r.command_name,targetId:r.target_id,level:r.level,startedAt:r.started_at,endedAt:r.ended_at,durationMs:r.duration_ms,exitCode:r.exit_code===null?null:r.exit_code,stdout:r.stdout??'',stderr:r.stderr??'',status:r.status,error:r.error??undefined});
+}
+
+/** Execution history retention from FARCMD_EXECUTION_RETENTION_DAYS (default 365, 0 = keep forever). */
+export function executionRetentionMs():number{
+  const days=Number(process.env.FARCMD_EXECUTION_RETENTION_DAYS??'365');
+  if(!Number.isFinite(days)||days<0)throw new Error('FARCMD_EXECUTION_RETENTION_DAYS must be a non-negative number');
+  return days*86_400_000;
 }
