@@ -53,7 +53,7 @@ async function fixture(){
   const setOwn=(enabled:boolean)=>app.inject({method:'PUT',url:'/api/mcp-access',headers:{cookie:webCookie,origin:ISSUER},payload:{enabled}});
   const getOwn=async()=>(await app.inject({method:'GET',url:'/api/mcp-access',headers:{cookie:webCookie}})).json();
   const ctx={userId:user.id,clientId:CLIENT,accessToken:token};
-  return {dir,db,app,admin,user,connector,l1,l4,tools,call,setOwn,getOwn,webCookie,ctx,done:()=>rmSync(dir,{recursive:true,force:true})};
+  return {dir,db,app,admin,user,connector,l1,l4,tools,rpc,call,setOwn,getOwn,webCookie,ctx,done:()=>rmSync(dir,{recursive:true,force:true})};
 }
 const ALL_TOOLS=['command_level_1','command_level_4','farcmd_health','list_commands'];
 
@@ -141,4 +141,26 @@ test('farcmd-admin mcp: --all and --email switches, status and user list',()=>{
     const audit=(db.prepare("SELECT event FROM security_events WHERE event LIKE 'admin.mcp.%' ORDER BY seq").all() as any[]).map(r=>r.event);
     assert.deepEqual(audit,['admin.mcp.block_user','admin.mcp.disable_all','admin.mcp.enable_all','admin.mcp.unblock_user']);
   }finally{rmSync(dir,{recursive:true,force:true});}
+});
+
+test('tools carry titles and MCP annotations by level; only level 1 is read-only',async()=>{
+  const f=await fixture();
+  try{
+    const listed=Object.fromEntries(((await f.rpc('tools/list',{})).tools as any[]).map(t=>[t.name,t]));
+    assert.equal(listed.command_level_1.title,'Run level 1 command (safe/read-only operations)');
+    assert.deepEqual(listed.command_level_1.annotations,{title:'Run level 1 command (safe/read-only operations)',readOnlyHint:true,destructiveHint:false,idempotentHint:true,openWorldHint:true});
+    assert.equal(listed.command_level_4.annotations.readOnlyHint,false);
+    assert.equal(listed.command_level_4.annotations.destructiveHint,true);
+    assert.equal(listed.command_level_1.annotations.destructiveHint,false);
+    for(const name of ['farcmd_health','list_commands']){assert.equal(listed[name].annotations.readOnlyHint,true,name);assert.equal(listed[name].annotations.openWorldHint,false,name);}
+    // Every tool declares its output; only the approval levels take a confirmation token.
+    for(const t of Object.values(listed) as any[])assert.equal(t.outputSchema?.type,'object',t.name);
+    assert.deepEqual(Object.keys(listed.command_level_1.inputSchema.properties),['commandId']);
+    assert.deepEqual(Object.keys(listed.command_level_4.inputSchema.properties).sort(),['commandId','confirmationToken']);
+    assert.doesNotMatch(listed.command_level_1.description,/approv/i); assert.match(listed.command_level_4.description,/approv/i);
+    const init=await f.rpc('initialize',{protocolVersion:'2025-06-18',capabilities:{},clientInfo:{name:'t',version:'1'}});
+    assert.equal(init.serverInfo.title,'farcmd'); assert.match(init.instructions,/list_commands/);
+    const commands=(await f.rpc('tools/call',{name:'list_commands',arguments:{}})).structuredContent.commands as any[];
+    assert.deepEqual(commands.map(c=>c.tool).sort(),['command_level_1','command_level_4']);
+  }finally{f.done();}
 });

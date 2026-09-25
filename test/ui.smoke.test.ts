@@ -67,6 +67,9 @@ test('web UI: sign in, visit every page, toggle MCP access, sign out',{skip:!exi
     await page.locator('.row',{hasText:'web-01'}).getByRole('button',{name:'Edit'}).click();
     await dialog.getByLabel('Port',{exact:true}).fill('2222'); await dialog.getByRole('button',{name:'Save'}).click();
     await page.locator('.row',{hasText:'deploy@web-01.internal:2222'}).waitFor();
+    await page.locator('details.checklist',{hasText:'Setup checklist'}).waitFor(); // open while steps remain
+    assert.equal(await page.locator('details.checklist').getAttribute('open'),'','the checklist is open while steps remain');
+    if(process.env.FARCMD_UI_SCREENSHOTS)await page.screenshot({path:join(process.env.FARCMD_UI_SCREENSHOTS,'ssh.png'),fullPage:true});
     await page.getByRole('link',{name:'Commands',exact:true}).click();
     await page.getByRole('button',{name:'New command'}).click();
     await dialog.getByLabel('Name',{exact:true}).fill('Disk usage'); await dialog.getByLabel('Content',{exact:true}).fill('df -h');
@@ -86,11 +89,15 @@ test('web UI: sign in, visit every page, toggle MCP access, sign out',{skip:!exi
       await page.getByRole('link',{name:link,exact:true}).click();
       await page.getByRole('heading',{name:heading}).first().waitFor();
     }
+    // Settings (the last page visited): self-service password change.
+    await page.fill('#current-password',PASSWORD); await page.fill('#new-password','a different long password'); await page.fill('#repeat-password','a different long password');
+    await page.getByRole('button',{name:'Change password'}).click(); await page.getByText('Password changed.').waitFor();
+    await page.getByRole('link',{name:'Audit',exact:true}).click(); await page.locator('.pager').first().getByText(/ of \d+/).waitFor();
     await page.getByRole('button',{name:'Log out'}).click();
     await page.getByRole('heading',{name:'Sign in'}).waitFor();
     assert.deepEqual(problems.filter(p=>!/401|Authentication required/.test(p)),[],'no script errors');
     const events=(db.prepare("SELECT event||':'||outcome AS e FROM security_events WHERE actor='web' ORDER BY seq").all() as any[]).map(r=>r.e);
-    assert.deepEqual(events.filter(e=>/^(auth|mcp_access)\./.test(e)),['auth.login:failure','auth.login:success','mcp_access.update:success','mcp_access.update:success','auth.logout:success']);
+    assert.deepEqual(events.filter(e=>/^(auth|mcp_access|account)\./.test(e)),['auth.login:failure','auth.login:success','mcp_access.update:success','mcp_access.update:success','account.password_change:success','auth.logout:success']);
   }finally{
     await browser.close(); await app.close();
     if(savedUrl===undefined)delete process.env.MCP_PUBLIC_URL; else process.env.MCP_PUBLIC_URL=savedUrl;

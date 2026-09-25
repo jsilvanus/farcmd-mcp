@@ -1,4 +1,5 @@
 import { lookup } from 'node:dns/promises';
+import { BlockList, isIP } from 'node:net';
 
 export interface CimdMetadata {
   client_id: string;
@@ -70,14 +71,31 @@ async function assertPublicHost(hostname: string) {
   }
 }
 
-function privateIp(address: string) {
-  if (address.includes(':')) {
-    const n = address.toLowerCase();
-    return n === '::1' || n.startsWith('fc') || n.startsWith('fd') || /^fe[89ab]/.test(n);
-  }
-  const p = address.split('.').map(Number);
-  if (p.length !== 4 || p.some(x => !Number.isInteger(x) || x < 0 || x > 255)) return true;
-  const a = p[0]!; const b = p[1]!;
-  return a === 0 || a === 10 || a === 127 || (a === 169 && b === 254) ||
-    (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168);
+/** Addresses a CIMD fetch must never reach: loopback, private, link-local, CGNAT, benchmarking, multicast, reserved. */
+const blocked = new BlockList();
+for (const [net, prefix] of [['0.0.0.0', 8], ['10.0.0.0', 8], ['100.64.0.0', 10], ['127.0.0.0', 8], ['169.254.0.0', 16], ['172.16.0.0', 12],
+  ['192.0.0.0', 24], ['192.0.2.0', 24], ['192.168.0.0', 16], ['198.18.0.0', 15], ['198.51.100.0', 24], ['203.0.113.0', 24], ['224.0.0.0', 3]] as const) {
+  blocked.addSubnet(net, prefix, 'ipv4');
+}
+for (const [net, prefix] of [['::', 128], ['::1', 128], ['fc00::', 7], ['fe80::', 10], ['fec0::', 10], ['ff00::', 8], ['2001:db8::', 32], ['100::', 64]] as const) {
+  blocked.addSubnet(net, prefix, 'ipv6');
+}
+
+/** Exported for tests. IPv4-mapped (::ffff:a.b.c.d) and NAT64 (64:ff9b::/96) addresses are checked as the IPv4 address they carry. */
+export function privateIp(address: string): boolean {
+  const version = isIP(address);
+  if (version === 4) return blocked.check(address, 'ipv4');
+  if (version !== 6) return true;
+  const embedded = embeddedIpv4(address);
+  if (embedded) return blocked.check(embedded, 'ipv4');
+  return blocked.check(address, 'ipv6');
+}
+
+function embeddedIpv4(address: string): string | undefined {
+  const n = address.toLowerCase();
+  const dotted = /^(?:::ffff:|64:ff9b::)(\d+\.\d+\.\d+\.\d+)$/.exec(n);
+  if (dotted) return dotted[1];
+  const hex = /^(?:::ffff:|64:ff9b::)([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(n);
+  if (hex) { const hi = parseInt(hex[1]!, 16), lo = parseInt(hex[2]!, 16); return [hi >> 8, hi & 255, lo >> 8, lo & 255].join('.'); }
+  return undefined;
 }

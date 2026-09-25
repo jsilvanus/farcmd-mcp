@@ -169,3 +169,28 @@ test('farcmd-admin CLI: create, list, registration, password, delete; passwords 
     assert.equal(noKey.status,2); assert.match(noKey.stderr,/FARCMD_ENCRYPTION_KEY/);
   }finally{rmSync(dir,{recursive:true,force:true});}
 });
+
+test('self-service password change: needs the current password, keeps this session, ends the others and refresh tokens',async()=>{
+  const f=await fixture();
+  try{
+    await f.admin.create({email:'p@example.test',name:'P',password:PASSWORD});
+    // Its own client IP: the sign-in budget (8 per IP per 15 minutes) is shared with the other tests in this file.
+    const signIn=async(password=PASSWORD)=>{const r=await f.app.inject({method:'POST',url:'/api/auth/login',remoteAddress:'198.51.100.21',payload:{email:'p@example.test',password}});const c=r.cookies.find((x:any)=>x.name==='farcmd_session');return {status:r.statusCode as number,cookie:c?'farcmd_session='+c.value:undefined};};
+    const a=await signIn(); const b=await signIn();
+    const change=(cookie:string,payload:Record<string,unknown>)=>f.app.inject({method:'POST',url:'/api/account/password',headers:{cookie},payload});
+    assert.equal((await change(a.cookie!,{currentPassword:'wrong password here',newPassword:'another long password'})).statusCode,400);
+    assert.equal((await change(a.cookie!,{currentPassword:PASSWORD,newPassword:'short'})).statusCode,400);
+    assert.equal((await change(a.cookie!,{currentPassword:PASSWORD,newPassword:PASSWORD})).statusCode,400);
+    const user=f.users.getUserByEmail('p@example.test')!;
+    f.store.oauthTokens().issueRefreshToken({familyId:'fam',clientId:'https://client.example/c.json',subject:user.id,scope:'mcp',expires:Date.now()+60_000});
+    const ok=await change(a.cookie!,{currentPassword:PASSWORD,newPassword:'a brand new long password'});
+    assert.equal(ok.statusCode,200,ok.body); assert.deepEqual(ok.json(),{ok:true,sessionsEnded:1,refreshTokensRevoked:1});
+    assert.equal((await f.app.inject({method:'GET',url:'/api/auth/session',headers:{cookie:a.cookie!}})).statusCode,200,'this session stays signed in');
+    assert.equal((await f.app.inject({method:'GET',url:'/api/auth/session',headers:{cookie:b.cookie!}})).statusCode,401,'other sessions end');
+    assert.equal((await signIn()).status,401,'the old password no longer works');
+    assert.equal((await signIn('a brand new long password')).status,200);
+    const events=JSON.stringify(f.db.prepare("SELECT * FROM security_events WHERE event='account.password_change'").all());
+    assert.ok(events.includes('"success"')&&events.includes('"failure"'),'successes and failures are audited');
+    assert.ok(!events.includes(PASSWORD)&&!events.includes('a brand new long password'),'passwords are never recorded');
+  }finally{f.done();}
+});

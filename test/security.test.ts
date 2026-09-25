@@ -200,6 +200,28 @@ test('connector creates L4 confirmation without executing SSH',async()=>{
   } finally { cleanup(f); }
 });
 
+test('L4 calls without a confirmation token continue the open request and deliver the approved result once',async()=>{
+  const f=fixture();
+  try{
+    const {targetId}=seedTarget(f); const commands=new SqliteCommandStore(f.db); const commandId=randomUUID(); const now=Date.now();
+    commands.create({id:commandId,userId:f.userId,targetId,name:'High impact',description:'test',type:'shell',content:'echo hi',level:4,enabled:true,createdAt:now,updatedAt:now});
+    new SqliteOAuthGrantStore(f.db).upsert(f.userId,'client','Client',[4],false); new SqliteOAuthGrantStore(f.db).upsert(f.userId,'other','Other',[4],false);
+    const connector=new FarcmdConnectorImpl(f.db,'http://localhost:5999'); const ctx={userId:f.userId,clientId:'client',accessToken:'t'};
+    const first=await connector.executeCommand(ctx,commandId,4); assert.ok('pending' in first);
+    const again=await connector.executeCommand(ctx,commandId,4); assert.ok('pending' in again);
+    assert.equal(again.confirmationToken,first.confirmationToken,'no second approval request while one is open');
+    const otherClient=await connector.executeCommand({...ctx,clientId:'other'},commandId,4); assert.ok('pending' in otherClient);
+    assert.notEqual(otherClient.confirmationToken,first.confirmationToken,'requests are per client');
+    // The person approves and the command runs (stand-in for approvePending, which needs a real SSH target).
+    new SqliteExecutionStore(f.db).complete(first.confirmationToken,{exitCode:0,stdout:'done',stderr:'',durationMs:5});
+    const delivered=await connector.executeCommand(ctx,commandId,4);
+    assert.ok(!('pending' in delivered)); assert.equal(delivered.stdout,'done');
+    const next=await connector.executeCommand(ctx,commandId,4); assert.ok('pending' in next);
+    assert.notEqual(next.confirmationToken,first.confirmationToken,'a delivered result is not returned twice; the next call asks again');
+    await assert.rejects(()=>connector.executeCommand(ctx,commandId,4,first.confirmationToken),/not found or expired/);
+  } finally { cleanup(f); }
+});
+
 
 test('integrity baselines hash command content, remote script and authorized key line',()=>{
   const content='echo hi';
@@ -218,20 +240,21 @@ function seedTarget(f:{db:any;userId:string}){
   return {targetId,keyId};
 }
 
-test('L3 execution without a verification authority is blocked before any SSH connection and recorded',async()=>{
+for(const [label,level,verifyIntegrity] of [['L3',3,false],['L1 with verification on',1,true]] as const)
+test(label+' execution without a verification authority is blocked before any SSH connection and recorded',async()=>{
   const f=fixture();
   const previous=process.env.FARCMD_ENCRYPTION_KEY; process.env.FARCMD_ENCRYPTION_KEY=Buffer.alloc(32,7).toString('base64');
   try{
     const {targetId}=seedTarget(f);
     const commands=new SqliteCommandStore(f.db); const commandId=randomUUID(); const content='echo hi';
-    commands.create({id:commandId,userId:f.userId,targetId,name:'mutating',description:'m',type:'shell',content,level:3,enabled:true,createdAt:Date.now(),updatedAt:Date.now()});
+    commands.create({id:commandId,userId:f.userId,targetId,name:'mutating',description:'m',type:'shell',content,level,verifyIntegrity,enabled:true,createdAt:Date.now(),updatedAt:Date.now()});
     const installId=randomUUID(); const script=buildFarcmdScript('http://localhost:5999',commandId,'shell',content);
     const line=buildCommandRestrictedAuthorizedKey('ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAItest',farcmdScriptPath('http://localhost:5999',commandId));
     new SqliteCommandKeyStore(f.db).create({id:installId,userId:f.userId,commandId,targetId,masterKeyId:randomUUID(),encryptedPrivateKey:encryptSecret('not-a-key','command-installation:'+f.userId+':'+installId),publicKey:'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAItest',fingerprint:'sha256:x',remoteScriptPath:farcmdScriptPath('http://localhost:5999',commandId),authorizedKeyLine:line,scriptContent:script,commandSha256:hashCommandContent('shell',content),scriptSha256:sha256Hex(script),authorizedKeySha256:sha256Hex(line),installedAt:Date.now(),createdAt:Date.now(),updatedAt:Date.now()});
-    new SqliteOAuthGrantStore(f.db).upsert(f.userId,'client','Client',[3],false);
+    new SqliteOAuthGrantStore(f.db).upsert(f.userId,'client','Client',[level],false);
     const connector=new FarcmdConnectorImpl(f.db,'http://localhost:5999');
     const started=Date.now();
-    await assert.rejects(()=>connector.executeCommand({userId:f.userId,clientId:'client',accessToken:'t'},commandId,3),/Integrity verification is unavailable/);
+    await assert.rejects(()=>connector.executeCommand({userId:f.userId,clientId:'client',accessToken:'t'},commandId,level),/Integrity verification is unavailable/);
     assert.ok(Date.now()-started<1000,'no network connection was attempted');
     const row=f.db.prepare('SELECT status,error FROM execution_history WHERE user_id=?').get(f.userId) as any;
     assert.equal(row.status,'blocked'); assert.match(row.error,/unavailable/);
@@ -257,4 +280,49 @@ test('MCP discovery exposes command metadata only: no content, keys, verifier or
     const tools=Object.keys((server as any)._registeredTools).sort();
     assert.deepEqual(tools,['command_level_1','command_level_2','command_level_3','command_level_4','command_level_5','farcmd_health','list_commands']);
   } finally { cleanup(f); }
+});
+
+test('web session tokens are stored only as hashes, and legacy plaintext rows are migrated',()=>{
+  const f=fixture();
+  try{
+    const token='legacy-session-token-'+randomUUID();
+    f.db.prepare('INSERT INTO web_sessions (token,user_id,expires) VALUES (?,?,?)').run(token,f.userId,Date.now()+60_000);
+    const restarted=new SqliteAuthStore(join(f.dir,'app.sqlite'));
+    assert.ok(!JSON.stringify(f.db.prepare('SELECT * FROM web_sessions').all()).includes(token),'plaintext replaced by its hash');
+    assert.equal(restarted.getWebSession(token)?.userId,f.userId,'the legacy session keeps working');
+    const fresh='fresh-'+randomUUID(); restarted.saveWebSession({token:fresh,userId:f.userId,expires:Date.now()+60_000});
+    assert.ok(!JSON.stringify(f.db.prepare('SELECT * FROM web_sessions').all()).includes(fresh));
+    assert.equal(restarted.getWebSession(fresh)?.token,fresh);
+    restarted.deleteWebSession(fresh); assert.equal(restarted.getWebSession(fresh),undefined);
+  }finally{cleanup(f);}
+});
+
+test('CIMD fetches refuse private, reserved and IPv4-mapped addresses',async()=>{
+  const { privateIp }=await import('../src/oauth/cimd.js');
+  for(const a of ['127.0.0.1','10.0.0.1','172.16.5.4','192.168.1.1','169.254.169.254','100.64.0.1','0.0.0.0','224.0.0.1','::','::1','fd00::1','fe80::1','::ffff:127.0.0.1','::ffff:a9fe:a9fe','64:ff9b::7f00:1','not-an-ip'])assert.equal(privateIp(a),true,a);
+  for(const a of ['93.184.215.14','1.1.1.1','2606:4700:4700::1111','::ffff:8.8.8.8'])assert.equal(privateIp(a),false,a);
+});
+
+test('execution history retention removes old runs with their output and audits the removal per user',async()=>{
+  const f=fixture();
+  const previousKey=process.env.FARCMD_ENCRYPTION_KEY; process.env.FARCMD_ENCRYPTION_KEY=Buffer.alloc(32,9).toString('base64');
+  try{
+    const { executionRetentionMs }=await import('../src/execution-history.js');
+    const history=new SqliteExecutionHistoryStore(f.db); const day=86_400_000; const now=Date.now();
+    const run=(startedAt:number,stdout:string)=>history.create({id:randomUUID(),userId:f.userId,clientId:'c',commandId:randomUUID(),commandName:'n',targetId:'t',level:1,startedAt,endedAt:startedAt+1,durationMs:1,exitCode:0,stdout,stderr:'',status:'success'});
+    run(now-400*day,'old secret output'); run(now-10*day,'recent output');
+    assert.equal(history.prune(365*day,now),1);
+    const rows=JSON.stringify(f.db.prepare('SELECT * FROM execution_history').all());
+    assert.ok(!rows.includes('old secret output')&&rows.includes('recent output'));
+    const audited=f.db.prepare("SELECT user_id,details FROM security_events WHERE event='execution_history.pruned'").all() as any[];
+    assert.equal(audited.length,1); assert.equal(audited[0].user_id,f.userId); assert.equal(JSON.parse(audited[0].details).removed,1);
+    assert.equal(history.prune(365*day,now),0,'nothing left to prune, nothing audited');
+    assert.equal((f.db.prepare("SELECT COUNT(*) AS n FROM security_events WHERE event='execution_history.pruned'").get() as any).n,1);
+    const saved=process.env.FARCMD_EXECUTION_RETENTION_DAYS;
+    try{
+      delete process.env.FARCMD_EXECUTION_RETENTION_DAYS; assert.equal(executionRetentionMs(),365*day);
+      process.env.FARCMD_EXECUTION_RETENTION_DAYS='0'; assert.equal(executionRetentionMs(),0);
+      process.env.FARCMD_EXECUTION_RETENTION_DAYS='-1'; assert.throws(()=>executionRetentionMs());
+    }finally{if(saved===undefined)delete process.env.FARCMD_EXECUTION_RETENTION_DAYS;else process.env.FARCMD_EXECUTION_RETENTION_DAYS=saved;}
+  }finally{if(previousKey===undefined)delete process.env.FARCMD_ENCRYPTION_KEY;else process.env.FARCMD_ENCRYPTION_KEY=previousKey;cleanup(f);}
 });

@@ -6,8 +6,10 @@
 #   docker compose exec farcmd farcmd-admin user create --email you@example.org --name "You"
 services:
   farcmd:
+    # Published image (see the README); pin a version with FARCMD_VERSION in .env, e.g. 1.0.0.
+    # `docker compose up -d --build` builds from this checkout instead.
+    image: ghcr.io/jsilvanus/farcmd-mcp:${FARCMD_VERSION:-1}
     build: .
-    image: farcmd-mcp:latest
     restart: unless-stopped
     env_file: .env
     environment:

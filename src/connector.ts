@@ -6,7 +6,7 @@ import { executeSshCommand, openSshSession, sha256Hex, type SshExecResult, type 
 import { CapabilityVerificationService } from './capability-verification.js';
 import { AuditLog, type AuditActor, type AuditOutcome } from './audit.js';
 import { SqliteSshStore } from './storage/ssh.js';
-import { SqliteCommandStore, type CommandLevel, hashCommandContent } from './command-registry.js';
+import { SqliteCommandStore, type CommandLevel, hashCommandContent, requiresIntegrityVerification } from './command-registry.js';
 import { SqliteCommandInstallationStore } from './storage/command-installations.js';
 import { SqliteOAuthGrantStore } from './oauth/grants.js';
 import { SqliteExecutionStore, confirmationForLevel, type ConfirmationRequirement } from './execution.js';
@@ -18,7 +18,10 @@ import { executionLimits } from './limits.js';
 export interface ConnectorContext { userId:string; clientId:string; accessToken:string; }
 export interface CommandSummary { id:string; name:string; description:string; level:CommandLevel; enabled:boolean; confirmation:ConfirmationRequirement; }
 export interface CommandExecution { ok:true; commandId:string; level:CommandLevel; exitCode:number|null; stdout:string; stderr:string; durationMs:number; signal?:string; truncated?:boolean; }
-export interface PendingConfirmation {ok:true;pending:true;commandId:string;level:CommandLevel;confirmation:ConfirmationRequirement;approvalUrl:string;confirmationToken:string;expiresAt:number;}
+const NEXT_STEP='Show approvalUrl to the person and wait until they say they have approved it. Then call this tool again with the same commandId to get the result. Passing confirmationToken is optional: it only identifies this request and is not a credential.';
+export interface PendingConfirmation {ok:true;pending:true;commandId:string;level:CommandLevel;confirmation:ConfirmationRequirement;approvalUrl:string;confirmationToken:string;expiresAt:number;
+  /** Plain-language instructions for the model. */
+  next:string;}
 export interface FarcmdConnector {
   health(context:ConnectorContext):Promise<{ok:true}>;
   listCommands(context:ConnectorContext):Promise<CommandSummary[]>;
@@ -57,7 +60,6 @@ export class FarcmdConnectorImpl implements FarcmdConnector {
   async executeCommand(context:ConnectorContext,commandId:string,expectedLevel:CommandLevel,confirmationToken?:string):Promise<CommandExecution|PendingConfirmation>{
     try{
       const result=await this.executeCommandChecked(context,commandId,expectedLevel,confirmationToken);
-      if('pending' in result&&!confirmationToken)this.audit(context.userId,context.clientId,'command.confirmation_requested',{commandId,level:expectedLevel,confirmation:result.confirmation});
       return result;
     }catch(error){
       // Executions that ran (or were blocked by integrity verification) are audited in executeStoredCommand;
@@ -80,11 +82,16 @@ export class FarcmdConnectorImpl implements FarcmdConnector {
     if(!confirmationToken)executionLimits().takeClientCall(context.userId,context.clientId);
     const confirmation=confirmationForLevel(command.level);
     if(confirmation!=='none'){
-      if(confirmationToken){ const pending=this.pending.get(confirmationToken); if(!pending||pending.userId!==context.userId||pending.clientId!==context.clientId||pending.commandId!==commandId||pending.level!==command.level||pending.status==='expired'||pending.status==='consumed')throw new Error('Confirmation request not found or expired.'); if(pending.status==='completed'){const completed=this.pending.consumeCompleted(confirmationToken);if(!completed)throw new Error('Confirmation result is no longer available.');return {ok:true,commandId,level:command.level,...completed};} return {ok:true,pending:true,commandId,level:command.level,confirmation,approvalUrl:this.publicUrl+'/?page=confirm&token='+encodeURIComponent(confirmationToken),confirmationToken,expiresAt:pending.expiresAt}; }
+      if(confirmationToken){ const pending=this.pending.get(confirmationToken); if(!pending||pending.userId!==context.userId||pending.clientId!==context.clientId||pending.commandId!==commandId||pending.level!==command.level||pending.status==='expired'||pending.status==='consumed')throw new Error('Confirmation request not found or expired.'); if(pending.status==='completed'){const completed=this.pending.consumeCompleted(confirmationToken);if(!completed)throw new Error('Confirmation result is no longer available.');return {ok:true,commandId,level:command.level,...completed};} return {ok:true,pending:true,commandId,level:command.level,confirmation,approvalUrl:this.publicUrl+'/?page=confirm&token='+encodeURIComponent(confirmationToken),confirmationToken,expiresAt:pending.expiresAt,next:NEXT_STEP}; }
 
+      // No token: continue this client's open request for the command instead of starting a new one.
+      const open=this.pending.findOpen(context.userId,context.clientId,commandId,command.level);
+      if(open?.status==='completed'){const completed=this.pending.consumeCompleted(open.token);if(completed){this.audit(context.userId,context.clientId,'command.confirmation_result_delivered',{commandId,level:command.level,withoutToken:true});return {ok:true,commandId,level:command.level,...completed};}}
+      else if(open)return {ok:true,pending:true,commandId,level:command.level,confirmation,approvalUrl:this.publicUrl+'/?page=confirm&token='+encodeURIComponent(open.token),confirmationToken:open.token,expiresAt:open.expiresAt,next:NEXT_STEP};
       const token=randomToken(); const now=Date.now(); const expiresAt=now+5*60_000;
       this.pending.create({token,userId:context.userId,clientId:context.clientId,commandId,level:command.level,createdAt:now,expiresAt});
-      return {ok:true,pending:true,commandId,level:command.level,confirmation,approvalUrl:this.publicUrl+'/?page=confirm&token='+encodeURIComponent(token),confirmationToken:token,expiresAt};
+      this.audit(context.userId,context.clientId,'command.confirmation_requested',{commandId,level:command.level,confirmation});
+      return {ok:true,pending:true,commandId,level:command.level,confirmation,approvalUrl:this.publicUrl+'/?page=confirm&token='+encodeURIComponent(token),confirmationToken:token,expiresAt,next:NEXT_STEP};
     }
     return this.executeStoredCommand(context.userId,context.clientId,commandId,command.level);
   }
@@ -130,7 +137,7 @@ export class FarcmdConnectorImpl implements FarcmdConnector {
     const config={hostname:target.hostname,port:target.port,username:target.username,hostFingerprint:target.hostFingerprint};
     const startedAt=Date.now();
     let result:SshExecResult;
-    if(level>=3){
+    if(requiresIntegrityVerification(command)){
       // Remote integrity verification immediately before execution. The execution connection is
       // authenticated concurrently (authentication runs nothing on the target), and its exec request is
       // sent only after verification succeeded, keeping the check-to-use window to one channel round trip.

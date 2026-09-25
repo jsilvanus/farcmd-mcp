@@ -22,6 +22,15 @@ export class SqliteExecutionStore {
   /** The approved run failed before producing a result: the request can be approved again until it expires. */
   release(token:string):void{this.db.prepare("UPDATE pending_executions SET status='pending' WHERE token=? AND status='running'").run(token);}
   complete(token:string,result:ExecutionResult):void{this.db.prepare("UPDATE pending_executions SET status='completed',exit_code=?,stdout=?,stderr=?,duration_ms=?,signal=? WHERE token=? AND status IN ('pending','running')").run(result.exitCode,result.stdout,result.stderr,result.durationMs,result.signal??null,token);}
+  /**
+   * The request a call without a confirmation token continues, so a client that cannot pass the token back
+   * still gets the result of the run the person approved: first an approved, not yet delivered result of
+   * the last 15 minutes, otherwise a request still waiting for approval (or running).
+   */
+  findOpen(userId:string,clientId:string,commandId:string,level:number,now=Date.now()):PendingExecution|undefined{
+    const r=this.db.prepare("SELECT token FROM pending_executions WHERE user_id=? AND client_id=? AND command_id=? AND level=? AND ((status='completed' AND created_at>=?) OR (status IN ('pending','running') AND expires_at>=?)) ORDER BY status='completed' DESC,created_at DESC LIMIT 1").get(userId,clientId,commandId,level,now-15*60_000,now) as any;
+    return r?this.get(r.token):undefined;
+  }
   expire(token:string):void{this.db.prepare("UPDATE pending_executions SET status='expired' WHERE token=? AND status='pending'").run(token);}
   cleanup(now=Date.now()):void{this.db.prepare("DELETE FROM pending_executions WHERE expires_at < ? OR status IN ('consumed','expired') AND expires_at < ?").run(now-24*60*60_000,now-24*60*60_000);}
 }

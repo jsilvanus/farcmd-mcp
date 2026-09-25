@@ -28,6 +28,7 @@ openssl rand -base64 32   # JWT_SECRET — signs OAuth access tokens
 | `PORT`, `HOST` | – | Listen address (default `0.0.0.0:5999`). |
 | `FARCMD_TRUST_PROXY` | behind a proxy | Which proxies may set `X-Forwarded-For`/`-Proto` (see §4). Without it every request appears to come from the proxy, which breaks per-IP login limits and audit IPs. |
 | `FARCMD_AUDIT_RETENTION_DAYS` | – | Audit log retention (default 365, `0` = forever). |
+| `FARCMD_EXECUTION_RETENTION_DAYS` | – | Execution history retention, output included (default 365, `0` = forever). |
 | `FARCMD_MAX_OUTPUT_BYTES` | – | Captured stdout/stderr per execution (default 262144). |
 | `FARCMD_SSH_MAX_CONCURRENT`, `FARCMD_SSH_MAX_PER_TARGET` | – | Concurrent SSH executions in total (default 8) and per target (default 2); over the limit, calls are refused. |
 | `FARCMD_MCP_EXECUTIONS_PER_MINUTE` | – | New MCP executions per user and OAuth client per minute (default 30, `0` = no limit). |
@@ -39,9 +40,13 @@ URL that has a path, or with the development bootstrap `MCP_DEFAULT_USER_PASSWOR
 
 ```sh
 cp .env.example .env        # fill in MCP_PUBLIC_URL, secrets, FARCMD_TRUST_PROXY
-docker compose up -d --build
+docker compose up -d        # pulls ghcr.io/jsilvanus/farcmd-mcp:${FARCMD_VERSION:-1}
 docker compose exec farcmd farcmd-admin user create --email you@example.org --name "You"
 ```
+
+Release images are published to `ghcr.io/jsilvanus/farcmd-mcp` (`linux/amd64`, `linux/arm64`) with
+tags `X.Y.Z`, `X.Y`, `X` and `latest` whenever a `vX.Y.Z` tag is pushed. Pin an exact version with
+`FARCMD_VERSION=1.0.0` in `.env`. `docker compose up -d --build` builds from the checkout instead.
 
 `docker-compose.yml` is for a reverse proxy on the host such as nginx; `docker-compose.traefik.yml`
 is for an existing Traefik (see below).
@@ -119,7 +124,7 @@ Restore: stop farcmd, replace `/data/app.sqlite` with the backup (remove stale `
 
 ## 5. Upgrades
 
-Pull or build the new image and restart. Database migrations run automatically at startup and
+Pull the new image (`docker compose pull`, or change `FARCMD_VERSION`) or rebuild, and restart. Database migrations run automatically at startup and
 only add tables/columns, but take a backup first. After upgrading, `farcmd-admin audit verify`
 confirms the audit chain is intact.
 

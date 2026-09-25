@@ -303,6 +303,9 @@ sys.stdout.write(body + "mac " + hmac.new(os.urandom(32), body.encode(), hashlib
       assert.equal((await api('POST','/api/confirm/'+encodeURIComponent(p4b.confirmationToken),{})).body.stdout,'level-four\n');
       const p5=await run(cmdL5,5) as any; assert.equal(p5.pending,true);
       const a5=await api('POST','/api/confirm/'+encodeURIComponent(p5.confirmationToken),{password:'level five password'}); assert.equal(a5.status,200,JSON.stringify(a5.body)); assert.equal(a5.body.stdout,'level-five\n');
+      // A client that does not send the token back (ChatGPT) collects the approved results by calling again.
+      assert.equal(((await run(cmdL4,4)) as any).stdout,'level-four\n','repeat call without token returns the approved L4 result');
+      assert.equal(((await run(cmdL5,5)) as any).stdout,'level-five\n','repeat call without token returns the approved L5 result');
     });
 
     await t.test('web Run: levels 1-3 directly, level 4 confirmed, level 5 with the password',{timeout:60_000},async()=>{
@@ -356,6 +359,11 @@ sys.stdout.write(body + "mac " + hmac.new(os.urandom(32), body.encode(), hashlib
       const removed=await api('DELETE','/api/ssh/targets/'+targetId+'/verifier');
       assert.equal(removed.body.removed,false); assert.match(removed.body.uninstallScript,/rm -f/);
       await assert.rejects(()=>run(cmdA,3),/Integrity verification is unavailable/);
+      assert.equal(((await run(cmdL1,1)) as any).stdout,'level-one\n');
+      // A level 1 command that opted in to verification is blocked like level 3.
+      assert.equal((await api('PATCH','/api/commands/'+cmdL1,{verifyIntegrity:true})).status,200);
+      await assert.rejects(()=>run(cmdL1,1),/Integrity verification is unavailable/);
+      assert.equal((await api('PATCH','/api/commands/'+cmdL1,{verifyIntegrity:false})).status,200);
       assert.equal(((await run(cmdL1,1)) as any).stdout,'level-one\n');
       must('sh -s',removed.body.uninstallScript);
       assert.equal(existsSync(paths.program)||existsSync(paths.secret)||existsSync(paths.sudoers),false);

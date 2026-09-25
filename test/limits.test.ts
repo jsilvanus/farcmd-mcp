@@ -58,10 +58,10 @@ test('connector: rate limit and SSH slots are enforced before anything runs, and
     new SqliteOAuthGrantStore(db).upsert(userId,'client','Client',[1,4],false);
     const limits=new ExecutionLimits({maxConcurrent:4,maxPerTarget:1,perClientPerMinute:2}); setExecutionLimits(limits);
     const connector=new FarcmdConnectorImpl(db,'http://localhost:5999'); const ctx={userId,clientId:'client',accessToken:'t'};
-    // Two confirmation requests fit the budget; the third is refused and creates nothing.
-    const first=await connector.executeCommand(ctx,l4,4) as any; await connector.executeCommand(ctx,l4,4);
+    // Two calls fit the budget (the second continues the open request); the third is refused.
+    const first=await connector.executeCommand(ctx,l4,4) as any; assert.equal((await connector.executeCommand(ctx,l4,4) as any).confirmationToken,first.confirmationToken);
     await assert.rejects(connector.executeCommand(ctx,l4,4),/Rate limit/);
-    assert.equal((db.prepare('SELECT COUNT(*) AS n FROM pending_executions').get() as any).n,2);
+    assert.equal((db.prepare('SELECT COUNT(*) AS n FROM pending_executions').get() as any).n,1);
     // Polling a confirmation for its result is not an execution and is not limited.
     assert.equal(((await connector.executeCommand(ctx,l4,4,first.confirmationToken)) as any).pending,true);
     // The target's only slot is busy: the approved command is refused before any SSH work.
