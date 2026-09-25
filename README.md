@@ -383,6 +383,7 @@ npm run dev              # Fastify API on :5999 + Vite dev server on :5173 (prox
 npm run typecheck
 npm test                 # unit and integration tests
 npm run test:ui          # built web UI in headless Chromium (after npm run build)
+npm run screenshots      # screenshots of every page with example data into screenshots/ (after npm run build)
 sudo -E npm run test:e2e # integrity verification against a real OpenSSH server
 npm run admin -- user create --email dev@example.org --name Dev
 ```
