@@ -27,6 +27,7 @@ import { FarcmdConnectorImpl, notifyConfirmationChanged } from '../src/connector
 import { SqliteOAuthGrantStore } from '../src/oauth/grants.js';
 import { SqliteCommandStore } from '../src/command-registry.js';
 import { SqliteExecutionStore } from '../src/execution.js';
+import { SqliteCommandKeyStore } from '../src/storage/command-keys.js';
 
 process.env.FARCMD_ENCRYPTION_KEY??=randomBytes(32).toString('base64');
 const PASSWORD='correct horse battery staple';
@@ -160,6 +161,16 @@ test('web Run: level rules, output hiding and audit, without reaching SSH',async
     assert.equal(verified.json().command.verifyIntegrity,true);
     assert.equal((await listed()).find(c=>c.id===f.l1).integrityVerification,'unavailable');
     assert.equal((await listed()).find(c=>c.id===f.l4).integrityVerification,'unavailable');
+    // Deleting an installed command takes two calls: the first only uninstalls (here queued for cleanup), the second deletes.
+    const installed=randomUUID();
+    new SqliteCommandStore(f.db).create({id:installed,userId:f.user.id,targetId:target,name:'Installed',description:'',type:'shell',content:'uptime',level:1,enabled:true,createdAt:now,updatedAt:now});
+    new SqliteCommandKeyStore(f.db).create({id:randomUUID(),userId:f.user.id,commandId:installed,targetId:target,masterKeyId:randomUUID(),encryptedPrivateKey:'x',publicKey:'ssh-ed25519 AAAA',fingerprint:'fp',remoteScriptPath:'~/.ssh/farcmd/x.sh',authorizedKeyLine:'restrict ssh-ed25519 AAAA',installedAt:now,createdAt:now,updatedAt:now});
+    const del=()=>f.app.inject({method:'DELETE',url:'/api/commands/'+installed,headers:{cookie:cookieHeader}});
+    const findInstalled=async()=>((await f.app.inject({method:'GET',url:'/api/commands',headers:{cookie:cookieHeader}})).json().commands as any[]).find(c=>c.id===installed);
+    const first=(await del()).json(); assert.equal(first.commandDeleted,false); assert.equal(first.remoteCleanupPending,true);
+    const kept=await findInstalled(); assert.ok(kept,'the first delete keeps the command'); assert.equal(kept.commandKey,undefined,'but it is no longer installed');
+    const second=(await del()).json(); assert.equal(second.commandDeleted,true); assert.equal(await findInstalled(),undefined,'the second delete removes it');
+    assert.equal((f.db.prepare("SELECT status FROM remote_capability_ledger WHERE command_id=?").get(installed) as any).status,'pending_removal');
     const events=(f.db.prepare("SELECT outcome,details FROM security_events WHERE event='command.web_run' ORDER BY seq").all() as any[]);
     assert.equal(events.length,3); assert.ok(events.every(e=>e.outcome==='failure'));
     assert.equal((f.db.prepare("SELECT COUNT(*) AS n FROM execution_history").get() as any).n,0,'nothing ran');

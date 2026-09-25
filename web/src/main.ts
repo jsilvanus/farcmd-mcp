@@ -295,7 +295,11 @@ async function commandsPage(){
   on('[data-create-command-key]',async b=>{if(!confirm('Generate an Ed25519 capability key and install a forced farcmd script on the target?'))return;try{await api('/api/commands/'+b.dataset.createCommandKey+'/key',{method:'POST',body:'{}'});commandsPage();}catch(err){alert((err as Error).message);}});
   on('[data-delete-command-key]',async b=>{if(!confirm('Remove this SSH capability remotely? If no master key is available, farcmd will record it for later cleanup.'))return;try{const r=await api('/api/commands/'+b.dataset.deleteCommandKey+'/key',{method:'DELETE'});if(r.remoteCleanupPending)alert('Capability removed locally and recorded for remote cleanup when a master key is available.');commandsPage();}catch(err){alert((err as Error).message);}});
   on('[data-toggle-command]',async b=>{const x=cs.find(v=>v.id===b.dataset.toggleCommand);if(x)await api('/api/commands/'+x.id,{method:'PATCH',body:JSON.stringify({enabled:!x.enabled})});commandsPage();});
-  on('[data-delete-command]',async b=>{if(confirm('Delete this command? If its SSH capability cannot currently be removed, farcmd will record it for later cleanup.')){const r=await api('/api/commands/'+b.dataset.deleteCommand,{method:'DELETE'});if(r.remoteCleanupPending)alert('The command was deleted locally and its remote capability was recorded for later cleanup.');commandsPage();}});
+  on('[data-delete-command]',async b=>{const c=cs.find(x=>x.id===b.dataset.deleteCommand);
+    if(!confirm(c?.commandKey?'Delete this command?\n\nIt has an installed SSH capability, so this first removes the capability from the target (or records it for later cleanup if the target cannot be reached now). The command itself stays in the list: press Delete again to remove it.':'Delete this command?'))return;
+    const r=await api('/api/commands/'+b.dataset.deleteCommand,{method:'DELETE'});
+    if(!r.commandDeleted)alert((r.remoteCleanupPending?'The SSH capability could not be removed now and was recorded for later cleanup.':'The SSH capability was removed from the target.')+' The command is still in the list: press Delete again to delete it.');
+    commandsPage();});
 }
 async function oauthPage(){
   const r=await api('/api/oauth/grants'); const grants=r.grants as any[];
