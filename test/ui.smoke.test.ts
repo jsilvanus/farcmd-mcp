@@ -67,6 +67,9 @@ test('web UI: sign in, visit every page, toggle MCP access, sign out',{skip:!exi
     await page.locator('.row',{hasText:'web-01'}).getByRole('button',{name:'Edit'}).click();
     await dialog.getByLabel('Port',{exact:true}).fill('2222'); await dialog.getByRole('button',{name:'Save'}).click();
     await page.locator('.row',{hasText:'deploy@web-01.internal:2222'}).waitFor();
+    await page.locator('details.checklist',{hasText:'Setup checklist'}).waitFor(); // open while steps remain
+    assert.equal(await page.locator('details.checklist').getAttribute('open'),'','the checklist is open while steps remain');
+    if(process.env.FARCMD_UI_SCREENSHOTS)await page.screenshot({path:join(process.env.FARCMD_UI_SCREENSHOTS,'ssh.png'),fullPage:true});
     await page.getByRole('link',{name:'Commands',exact:true}).click();
     await page.getByRole('button',{name:'New command'}).click();
     await dialog.getByLabel('Name',{exact:true}).fill('Disk usage'); await dialog.getByLabel('Content',{exact:true}).fill('df -h');

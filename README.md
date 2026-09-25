@@ -51,7 +51,7 @@ Version: **1.0.0** · License: [EUPL-1.2](LICENSE)
 2. **The user** signs in to the web UI and adds an SSH *master key* and a *target* (host, port, account, pinned host fingerprint).
 3. The user creates **commands**: a single-line shell command or a Bash script, a target and a level from 1 to 5.
 4. The user **installs** each command. farcmd uses the master key once to upload the script to `~/.ssh/farcmd/` and add a forced-command `authorized_keys` entry for a new per-command key. After that the master key is not needed to run the command, and it can be locked or deleted.
-5. For level 3–5 commands, the user installs the **integrity verifier** on the target (automatically with sudo, or with a one-time root install script).
+5. For level 3–5 commands, the user installs the **integrity verifier** on the target (automatically with sudo, or with a one-time root install script). The account that runs sudo can be a separate admin account, so the command account needs no sudo rights.
 6. An **MCP client** connects to `https://<your-host>/mcp`. On first use it goes through OAuth: the user signs in and chooses which levels this client may see.
 7. The client calls `list_commands` and then `command_level_<n>` with a `commandId`. farcmd checks the grant, the MCP switches, the rate limits and (for levels 3–5) the integrity of the target, then runs the command over SSH with that command's key and returns the exit code, stdout and stderr.
 
@@ -433,7 +433,8 @@ A key generated in farcmd never leaves it, so once deleted it cannot be uploaded
 - Each target has a **verification authority**: a verification SSH key forced to a root-owned verifier through an argument-free sudoers rule, and a 32-byte HMAC secret that only root can read on the target (and that farcmd stores encrypted).
 - farcmd sends a fresh 256-bit nonce. The verifier measures the capability scripts, every `authorized_keys` entry sshd uses, and itself, and returns `HMAC-SHA256(secret, measurement)`. A fake verifier cannot read the secret, and an old response cannot be replayed.
 - Verification uses no master key.
-- Install the verifier automatically (via the command account or another admin account on the host, with root, a sudo password entered once and never stored, or passwordless sudo), or with a manual root install script.
+- Install the verifier automatically, or with a manual root install script (which needs no master key).
+- For the automatic install, **the account that runs sudo doesn't have to be the account the commands run as.** The verifier is always installed for the command account, but farcmd can connect as any account on the same host that can become root: an admin account with sudo (its password is entered once and never stored), an account with passwordless sudo, or root. The chosen master key must be authorized for that account. Keep the command account itself **without** sudo rights: unrestricted sudo on it would defeat the verifier.
 
 Details: [`docs/capability-integrity.md`](docs/capability-integrity.md).
 

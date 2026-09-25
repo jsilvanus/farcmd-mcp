@@ -106,9 +106,37 @@ function sectionHead(title:string, buttons:string){return '<div class="section-h
 function on(selector:string, handler:(el:HTMLElement)=>void){document.querySelectorAll<HTMLElement>(selector).forEach(el=>el.onclick=()=>handler(el));}
 function sshKeyOptions(keys:any[], selected?:string){return keys.map(k=>'<option value="'+escapeHtml(k.id)+'"'+(k.id===selected?' selected':'')+'>'+escapeHtml(k.name)+'</option>').join('');}
 
+type CheckState='done'|'todo'|'info';
+/** Setup steps from a first master key to a connected MCP client, computed from the current state. Collapsed once everything is done. */
+function setupChecklist(keys:any[],targets:any[],commands:any[],grants:any[]):string{
+  const names=(list:any[])=>list.map(t=>escapeHtml(t.name)).join(', ');
+  const installed=commands.filter(c=>c.commandKey); const needVerifier=targets.filter(t=>commands.some(c=>c.targetId===t.id&&c.level>=3)&&t.verifier?.status!=='active');
+  const unpinned=targets.filter(t=>!t.hostFingerprint); const locked=keys.filter(k=>k.passphraseRequired&&k.locked);
+  const steps:[CheckState,string,string][]=[
+    keys.length?[locked.length?'todo':'done','Master key available',locked.length?'Unlock '+names(locked)+' before provisioning.':'Its public key must be in the target account\'s authorized_keys.']
+      :installed.length?['info','Master key available','None right now, which is the recommended state between changes. Upload your master key again when you need to change something.']
+      :['todo','Add a master key','Generate or upload one below, then add its public key to the target account\'s authorized_keys.'],
+    targets.length?['done','Add an SSH target',targets.length+' target'+(targets.length===1?'':'s')+'.']:['todo','Add an SSH target','Host, port and the account commands run as.'],
+    !targets.length?['todo','Pin the host fingerprint','Run Test on the target and trust the fingerprint it shows.']
+      :unpinned.length?['todo','Pin the host fingerprint','Run Test on: '+names(unpinned)+'.']:['done','Pin the host fingerprint','All targets are pinned.'],
+    needVerifier.length?['todo','Install the integrity verifier','Needed for level 3–5 commands on: '+names(needVerifier)+'. The account that runs sudo can be a separate admin account.']
+      :['done','Install the integrity verifier',commands.some(c=>c.level>=3)?'Active wherever level 3–5 commands exist.':'Only needed for level 3–5 commands.'],
+    installed.length?['done','Create and install commands',installed.length+' of '+commands.length+' installed. Manage them on the <a href="#" data-page="commands">Commands page</a>.']
+      :['todo','Create and install commands','On the <a href="#" data-page="commands">Commands page</a>: New command, then Install.'],
+    grants.length?['done','Connect an MCP client',grants.length+' client'+(grants.length===1?'':'s')+' authorized (see <a href="#" data-page="oauth">OAuth Sources page</a>).']
+      :['todo','Connect an MCP client','Add '+escapeHtml(location.origin+'/mcp')+' as a remote MCP server in your client and approve it here.'],
+    keys.length&&installed.length?['info','Delete the master key when you are done','Recommended: installed commands keep running without it.']
+      :keys.length?['info','Delete the master key when you are done','Recommended once your commands are installed.']:['done','Delete the master key when you are done','No master key is stored.'],
+  ];
+  const open=steps.some(([state])=>state==='todo');
+  const mark={done:'✓',todo:'○',info:'i'};
+  return '<details class="checklist"'+(open?' open':'')+'><summary><strong>Setup checklist</strong> <small>'+steps.filter(([st])=>st==='done').length+' of '+steps.length+' done</small></summary><ol>'+
+    steps.map(([state,title,detail])=>'<li class="'+state+'"><span class="mark" aria-hidden="true">'+mark[state]+'</span><div><strong>'+escapeHtml(title)+'</strong><small>'+detail+'</small></div></li>').join('')+'</ol></details>';
+}
 async function sshPage() {
-  const [keysResult, targetsResult] = await Promise.all([api('/api/ssh/keys'),api('/api/ssh/targets')]);
+  const [keysResult, targetsResult, commandsResult, grantsResult] = await Promise.all([api('/api/ssh/keys'),api('/api/ssh/targets'),api('/api/commands'),api('/api/oauth/grants')]);
   const keys=keysResult.keys as any[]; const targets=targetsResult.targets as any[];
+  const commands=commandsResult.commands as any[]; const grants=(grantsResult.grants as any[]).filter(g=>!g.revoked);
   const ledger=(await Promise.all(targets.map(t=>api('/api/ssh/targets/'+t.id+'/capability-ledger')))).flatMap((r:any)=>r.entries as any[]);
   const ledgerTargets=targets.filter(t=>ledger.some(x=>x.targetId===t.id));
   const targetName=(id:string)=>targets.find(t=>t.id===id)?.name??id;
@@ -122,7 +150,7 @@ async function sshPage() {
       '<strong>'+escapeHtml(t.name)+'</strong><small>'+escapeHtml(t.username+'@'+t.hostname+':'+t.port)+(key?' · key '+escapeHtml(key.name):'')+'</small><small class="mono">'+escapeHtml(t.hostFingerprint??'Host fingerprint not pinned — run Test')+'</small>'+
       '<div class="pills">'+(v==='active'?pill('Verifier active','ok'):v==='pending'?pill('Verifier not activated','warn'):pill('No verifier: levels 3–5 blocked','bad'))+(t.verifier?.lastError?pill('Last verification failed','bad'):'')+(key?'':pill('No master key: provisioning off','warn'))+(t.enabled?'':pill('Disabled'))+'</div>',
       '<button class="small" data-test="'+t.id+'">Test</button><button class="small" data-verifier="'+t.id+'">Verifier</button><button class="small" data-edit-target="'+t.id+'">Edit</button><button class="small danger" data-delete-target="'+t.id+'">Delete</button>');});
-  shell('SSH configuration',
+  shell('SSH configuration',setupChecklist(keys,targets,commands,grants)+
     '<article>'+sectionHead('Master keys','<button class="small" id="upload-key">Upload key</button><button class="small primary" id="generate-key">Generate key</button>')+
     '<p class="hint">A master key is provisioning authority only: it installs, replaces and removes capabilities and installs verifiers. Passphrases are never stored. Deleting a master key keeps existing capabilities executable; level 3–5 commands keep running as long as the target\'s integrity verifier confirms them.</p>'+
     '<p class="hint"><strong>Recommended:</strong> delete the master key when you have finished provisioning, and add it again for the next change. Upload your own passphrase-protected key (kept safely outside farcmd) so the same key can be uploaded again later. A key generated here is gone for good once deleted, and a new key\'s public key would have to be added to the target\'s authorized_keys again. After adding a key again, select it on the target with Edit.</p>'+
@@ -189,7 +217,7 @@ function verifierRootPage(targetId:string,t:any,keys:any[],action:'install'|'rem
   const intro=action==='install'
     ?'<p>farcmd connects with the unlocked master key and installs (or repairs) the root-owned integrity verifier. A new verification key and secret replace the old ones.</p>'
     :'<p class="warning">Removing the verifier BLOCKS level 3–5 commands on this target until a verifier is installed again.</p>';
-  shell(action==='install'?'Install integrity verifier':'Remove integrity verifier',intro+'<form id="verifier-root-form"><p><small>The verifier is installed for the command account <strong>'+account+'</strong>. Root can be obtained through a different account on the same host, for example an admin account with sudo, so the command account itself needs no sudo rights.</small></p><label>Connect as SSH account <input name="installUsername" required value="'+account+'" autocomplete="off"></label><label>Using master key <select name="installKeyId">'+keys.map(k=>'<option value="'+escapeHtml(k.id)+'"'+(k.id===t?.sshKeyId?' selected':'')+'>'+escapeHtml(k.name)+(k.locked?' (locked)':'')+'</option>').join('')+'</select></label><label>sudo password of that account <input name="sudoPassword" type="password" autocomplete="off"></label><p><small>Used once to run the installer with sudo on the target and then discarded: farcmd never stores or logs it, and it is passed on the SSH session\'s standard input, never on a command line. Leave the password empty if that account is root or has passwordless sudo. Only use this if you trust the target account right now — its shell start-up files run before sudo. Otherwise use the manual root install script.</small></p><button>'+(action==='install'?'Install verifier':'Remove verifier')+'</button> <button type="button" id="verifier-cancel">Cancel</button></form><p id="verifier-error"></p>');
+  shell(action==='install'?'Install integrity verifier':'Remove integrity verifier',intro+'<form id="verifier-root-form"><div class="callout"><strong>The sudo account doesn\'t have to be the command account.</strong><p>The verifier is always installed for the command account <strong>'+account+'</strong>. Enter any account on the same host that can become root, for example an admin account with sudo, or root itself. The master key you choose must be authorized for that account.</p><p><strong>Recommended:</strong> keep the command account without sudo rights. Unrestricted sudo on the command account would defeat the verifier.</p></div><label>Connect as SSH account (the account that runs sudo) <input name="installUsername" required value="'+account+'" autocomplete="off"></label><label>Using master key <select name="installKeyId">'+keys.map(k=>'<option value="'+escapeHtml(k.id)+'"'+(k.id===t?.sshKeyId?' selected':'')+'>'+escapeHtml(k.name)+(k.locked?' (locked)':'')+'</option>').join('')+'</select></label><label>sudo password of that account <input name="sudoPassword" type="password" autocomplete="off"></label><p><small>Used once to run the installer with sudo on the target and then discarded: farcmd never stores or logs it, and it is passed on the SSH session\'s standard input, never on a command line. Leave the password empty if that account is root or has passwordless sudo. Only use this if you trust the target account right now — its shell start-up files run before sudo. Otherwise use the manual root install script.</small></p><button>'+(action==='install'?'Install verifier':'Remove verifier')+'</button> <button type="button" id="verifier-cancel">Cancel</button></form><p id="verifier-error"></p>');
   document.querySelector('#verifier-cancel')!.addEventListener('click',()=>render('ssh'));
   document.querySelector<HTMLFormElement>('#verifier-root-form')!.onsubmit=async e=>{
     e.preventDefault(); const form=e.currentTarget as HTMLFormElement; const button=form.querySelector('button')!; button.disabled=true;
@@ -217,11 +245,15 @@ async function commandsPage(){
       (c.enabled?'':pill('Disabled','warn'))+(c.commandKey?pill('Capability installed','ok'):pill('No capability'))+
       (c.level===5?pill(c.hasExecutionPassword?'Password set':'Password not set',c.hasExecutionPassword?'ok':'bad'):'')+
       (c.level>=3&&c.integrityVerification!=='active'?pill('Blocked: no active verifier','bad'):'')+'</div>',
-    '<button class="small primary" data-run-command="'+c.id+'"'+(!c.enabled?' disabled title="The command is disabled"':!c.commandKey?' disabled title="Install the SSH capability first"':'')+'>Run</button>'+
-    '<button class="small" data-edit-command="'+c.id+'">Edit</button>'+
-    (c.level===5?'<button class="small" data-set-level5="'+c.id+'">Password</button>':'')+
-    (c.commandKey?'<button class="small" data-delete-command-key="'+c.id+'">Uninstall</button>':'<button class="small" data-create-command-key="'+c.id+'">Install</button>')+
-    '<button class="small" data-toggle-command="'+c.id+'">'+(c.enabled?'Disable':'Enable')+'</button><button class="small danger" data-delete-command="'+c.id+'">Delete</button>'));
+    // Workflow left to right: Edit -> Install -> Run. Editing is locked (target, type, content) while installed.
+    '<div class="command-actions"><div class="flow">'+
+      '<button class="small" data-edit-command="'+c.id+'"'+(c.commandKey?' title="Installed: target, type and content are locked. Uninstall to change them."':'')+'>'+(c.commandKey?'<span aria-hidden="true">🔒 </span>':'')+'Edit</button><span class="flow-arrow" aria-hidden="true">→</span>'+
+      (c.commandKey?'<button class="small" data-delete-command-key="'+c.id+'">Uninstall</button>':'<button class="small'+(c.enabled?' next':'')+'" data-create-command-key="'+c.id+'">Install</button>')+'<span class="flow-arrow" aria-hidden="true">→</span>'+
+      '<button class="primary run" data-run-command="'+c.id+'"'+(!c.enabled?' disabled title="The command is disabled"':!c.commandKey?' disabled title="Install the SSH capability first"':'')+'>Run</button>'+
+    '</div><div class="secondary-actions">'+
+      (c.level===5?'<button class="small" data-set-level5="'+c.id+'">Password</button>':'')+
+      '<button class="small" data-toggle-command="'+c.id+'">'+(c.enabled?'Disable':'Enable')+'</button><button class="small danger" data-delete-command="'+c.id+'">Delete</button>'+
+    '</div></div>'));
   shell('Commands','<div id="mcp-access"></div>'+
     '<article>'+sectionHead('Command registry','<button class="small primary" id="new-command"'+(ts.length?'':' disabled title="Add an SSH target first"')+'>New command</button>')+
     '<p class="hint">A command is an MCP capability. Install creates a dedicated SSH key on the target that can only run this command’s farcmd-managed script.</p>'+
@@ -229,12 +261,12 @@ async function commandsPage(){
 
   // Content, type and target cannot change while a capability is installed (the server refuses with 409).
   const commandFields=(c?:any)=>{const locked=!!c?.commandKey; const dis=locked?' disabled':'';
-    return '<label>Name<input name="name" required maxlength="120" value="'+escapeHtml(c?.name??'')+'"></label>'+
+    return (locked?'<p class="locked-note"><span aria-hidden="true">🔒 </span>The SSH capability is installed, so target, type and content are locked (shown as installed). Name, description, level and output setting can still be changed. Uninstall to change the rest.</p>':'')+
+      '<label>Name<input name="name" required maxlength="120" value="'+escapeHtml(c?.name??'')+'"></label>'+
       '<label>Description<textarea name="description" rows="2" maxlength="2000">'+escapeHtml(c?.description??'')+'</textarea></label>'+
       '<div class="field-row"><label>Target<select name="targetId" required'+dis+'>'+ts.map(t=>'<option value="'+escapeHtml(t.id)+'"'+(t.id===c?.targetId?' selected':'')+'>'+escapeHtml(t.name)+'</option>').join('')+'</select></label>'+
       '<label>Type<select name="type"'+dis+'><option value="shell">Shell command</option><option value="bash_script"'+(c?.type==='bash_script'?' selected':'')+'>Bash script</option></select></label></div>'+
       '<label>Content<textarea name="content" rows="8" required spellcheck="false" class="mono" placeholder="Shell command or Bash script"'+dis+'>'+escapeHtml(c?.content??'')+'</textarea></label>'+
-      (locked?'<p class="hint">The SSH capability is installed, so target, type and content are locked. Uninstall it to change them.</p>':'')+
       '<label>Level<select name="level">'+[1,2,3,4,5].map(l=>'<option value="'+l+'"'+(l===(c?.level??1)?' selected':'')+'>'+l+' — '+LEVELS[l]+'</option>').join('')+'</select></label>'+
       (c?.level===5?'<p class="hint">Moving this command off level 5 clears its execution password.</p>':'')+
       '<label class="check"><input type="checkbox" name="showOutputOnApproval"'+(c?.showOutputOnApproval?' checked':'')+'> Show output after approval (levels 4–5)</label><p class="hint">Levels 1–3 always show their output when run from here. For levels 4–5, the approval page and Run show only the exit code unless this is on. The MCP client always gets the full result.</p>';};
@@ -245,7 +277,7 @@ async function commandsPage(){
   on('#new-command',()=>formDialog('New command',commandFields(),'Create command',async form=>{
     await api('/api/commands',{method:'POST',body:JSON.stringify(commandBody(form))}); commandsPage();}));
   on('[data-edit-command]',b=>{const c=cs.find(x=>x.id===b.dataset.editCommand); if(!c)return;
-    formDialog('Edit command',commandFields(c),'Save',async form=>{await api('/api/commands/'+c.id,{method:'PATCH',body:JSON.stringify(commandBody(form))}); commandsPage();});});
+    formDialog(c.commandKey?'Edit command (installed)':'Edit command',commandFields(c),'Save',async form=>{await api('/api/commands/'+c.id,{method:'PATCH',body:JSON.stringify(commandBody(form))}); commandsPage();});});
   on('[data-run-command]',b=>{const c=cs.find(x=>x.id===b.dataset.runCommand); if(c)runCommand({...c,targetName:targetName(c.targetId)});});
   on('[data-set-level5]',b=>{const c=cs.find(x=>x.id===b.dataset.setLevel5); if(!c)return;
     formDialog((c.hasExecutionPassword?'Change':'Set')+' execution password','<p class="hint">Level 5 commands run only after this password is entered on the confirmation page.</p><label>Password<input name="password" type="password" minlength="12" maxlength="1024" required autocomplete="new-password"></label><label>Repeat password<input name="repeat" type="password" required autocomplete="new-password"></label>','Save',async form=>{
