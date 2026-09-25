@@ -151,6 +151,7 @@ test('tools carry titles and MCP annotations by level; only level 1 is read-only
     assert.deepEqual(listed.command_level_1.annotations,{title:'Run level 1 command (safe/read-only operations)',readOnlyHint:true,destructiveHint:false,idempotentHint:true,openWorldHint:true});
     assert.equal(listed.command_level_4.annotations.readOnlyHint,false);
     assert.equal(listed.command_level_4.annotations.destructiveHint,true);
+    assert.equal(listed.command_level_1.annotations.destructiveHint,false);
     for(const name of ['farcmd_health','list_commands']){assert.equal(listed[name].annotations.readOnlyHint,true,name);assert.equal(listed[name].annotations.openWorldHint,false,name);}
   }finally{f.done();}
 });

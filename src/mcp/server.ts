@@ -20,11 +20,13 @@ function contextFromExtra(extra:Extra):ConnectorContext{
  * MCP tool annotations per command level. They are hints for the client (for example whether to ask before a
  * call), not guarantees: farcmd cannot inspect what a script does, so they rest on the level a person assigned.
  * Level 1 is by definition safe/read-only, so it is marked read-only; clients may run it without asking.
+ * Levels 2-5 change things on the target and farcmd cannot promise the changes are only additive, so they are
+ * all marked destructive (MCP's destructiveHint:false means "only additive updates").
  */
 export const LEVEL_ANNOTATIONS:Record<CommandLevel,{readOnlyHint:boolean;destructiveHint:boolean;idempotentHint:boolean;openWorldHint:boolean}>={
   1:{readOnlyHint:true,destructiveHint:false,idempotentHint:true,openWorldHint:true},
-  2:{readOnlyHint:false,destructiveHint:false,idempotentHint:false,openWorldHint:true},
-  3:{readOnlyHint:false,destructiveHint:false,idempotentHint:false,openWorldHint:true},
+  2:{readOnlyHint:false,destructiveHint:true,idempotentHint:false,openWorldHint:true},
+  3:{readOnlyHint:false,destructiveHint:true,idempotentHint:false,openWorldHint:true},
   4:{readOnlyHint:false,destructiveHint:true,idempotentHint:false,openWorldHint:true},
   5:{readOnlyHint:false,destructiveHint:true,idempotentHint:false,openWorldHint:true},
 };

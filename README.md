@@ -240,10 +240,9 @@ A run returns the exit code, signal, duration, stdout and stderr (up to `FARCMD_
 |---|---|---|---|---|
 | `farcmd_health`, `list_commands` | true | false | true | false |
 | `command_level_1` | **true** | false | true | true |
-| `command_level_2`, `command_level_3` | false | false | false | true |
-| `command_level_4`, `command_level_5` | false | true | false | true |
+| `command_level_2` … `command_level_5` | false | true | false | true |
 
-Hints are advisory. farcmd can't inspect what a script does, so they are only as accurate as the level a person assigned. Because level 1 is marked read-only, **some clients run level 1 commands without asking**. Put a command at level 1 only if it truly changes nothing.
+Levels 2–5 are all marked destructive: in MCP, `destructiveHint: false` means a tool only adds things, and farcmd can't promise that for commands that change a target. Hints are advisory. farcmd can't inspect what a script does, so they are only as accurate as the level a person assigned. Because level 1 is marked read-only, **some clients run level 1 commands without asking**. Put a command at level 1 only if it truly changes nothing.
 
 **Level 4 and 5 approvals.** Calling a level 4 or 5 tool never runs the command right away. It creates an approval request that is valid for 5 minutes:
 
