@@ -108,9 +108,11 @@ function sshKeyOptions(keys:any[], selected?:string){return keys.map(k=>'<option
 
 type CheckState='done'|'todo'|'info';
 /** Setup steps from a first master key to a connected MCP client, computed from the current state. Collapsed once everything is done. */
+/** Levels 3–5 always need the verifier; levels 1–2 only when the command opts in. */
+const needsVerifier=(c:any)=>c.level>=3||!!c.verifyIntegrity;
 function setupChecklist(keys:any[],targets:any[],commands:any[],grants:any[]):string{
   const names=(list:any[])=>list.map(t=>escapeHtml(t.name)).join(', ');
-  const installed=commands.filter(c=>c.commandKey); const needVerifier=targets.filter(t=>commands.some(c=>c.targetId===t.id&&c.level>=3)&&t.verifier?.status!=='active');
+  const installed=commands.filter(c=>c.commandKey); const needVerifier=targets.filter(t=>commands.some(c=>c.targetId===t.id&&needsVerifier(c))&&t.verifier?.status!=='active');
   const unpinned=targets.filter(t=>!t.hostFingerprint); const locked=keys.filter(k=>k.passphraseRequired&&k.locked);
   const steps:[CheckState,string,string][]=[
     keys.length?[locked.length?'todo':'done','Master key available',locked.length?'Unlock '+names(locked)+' before provisioning.':'Its public key must be in the target account\'s authorized_keys.']
@@ -119,8 +121,8 @@ function setupChecklist(keys:any[],targets:any[],commands:any[],grants:any[]):st
     targets.length?['done','Add an SSH target',targets.length+' target'+(targets.length===1?'':'s')+'.']:['todo','Add an SSH target','Host, port and the account commands run as.'],
     !targets.length?['todo','Pin the host fingerprint','Run Test on the target and trust the fingerprint it shows.']
       :unpinned.length?['todo','Pin the host fingerprint','Run Test on: '+names(unpinned)+'.']:['done','Pin the host fingerprint','All targets are pinned.'],
-    needVerifier.length?['todo','Install the integrity verifier','Needed for level 3–5 commands on: '+names(needVerifier)+'. The account that runs sudo can be a separate admin account.']
-      :['done','Install the integrity verifier',commands.some(c=>c.level>=3)?'Active wherever level 3–5 commands exist.':'Only needed for level 3–5 commands.'],
+    needVerifier.length?['todo','Install the integrity verifier','Needed for level 3–5 commands (and verified level 1–2 commands) on: '+names(needVerifier)+'. The account that runs sudo can be a separate admin account.']
+      :['done','Install the integrity verifier',commands.some(needsVerifier)?'Active wherever commands need it.':'Only needed for level 3–5 commands, or level 1–2 commands with verification on.'],
     installed.length?['done','Create and install commands',installed.length+' of '+commands.length+' installed. Manage them on the <a href="#" data-page="commands">Commands page</a>.']
       :['todo','Create and install commands','On the <a href="#" data-page="commands">Commands page</a>: New command, then Install.'],
     grants.length?['done','Connect an MCP client',grants.length+' client'+(grants.length===1?'':'s')+' authorized (see <a href="#" data-page="oauth">OAuth Sources page</a>).']
@@ -191,7 +193,7 @@ async function sshPage() {
 /** Integrity verifier status and actions for one target. */
 function verifierDialog(t:any, keys:any[]){
   const v=t.verifier??{status:'unavailable'};
-  const state=v.status==='active'?'<p>'+pill('Active','ok')+(v.lastVerifiedAt?' Last verified '+escapeHtml(new Date(v.lastVerifiedAt).toLocaleString())+'.':'')+'</p>':v.status==='pending'?'<p class="warning">Installed but not activated. Level 3–5 commands are blocked until “Verify now” succeeds.</p>':'<p class="warning">No integrity verifier. Level 3–5 commands on this target are blocked.</p>';
+  const state=v.status==='active'?'<p>'+pill('Active','ok')+(v.lastVerifiedAt?' Last verified '+escapeHtml(new Date(v.lastVerifiedAt).toLocaleString())+'.':'')+'</p>':v.status==='pending'?'<p class="warning">Installed but not activated. Level 3–5 commands are blocked until “Verify now” succeeds.</p>':'<p class="warning">No integrity verifier. Level 3–5 commands (and level 1–2 commands with verification on) on this target are blocked.</p>';
   const d=openDialog('Integrity verifier — '+t.name,state+(v.lastError?'<p class="warning">Last verification problem: '+escapeHtml(v.lastError)+'</p>':'')+
     '<div class="action-list"><button data-verifier-install>'+(v.status==='unavailable'?'Install verifier':'Repair verifier')+' (automatic)</button><button data-verifier-manual>Manual root install script</button>'+(v.status!=='unavailable'?'<button data-verifier-verify>Verify now</button><button class="danger" data-verifier-remove>Remove verifier</button>':'')+'</div>'+
     '<div class="dialog-actions"><button data-dialog-close>Close</button></div>');
@@ -216,7 +218,7 @@ function verifierRootPage(targetId:string,t:any,keys:any[],action:'install'|'rem
   const account=escapeHtml(t?.username??'');
   const intro=action==='install'
     ?'<p>farcmd connects with the unlocked master key and installs (or repairs) the root-owned integrity verifier. A new verification key and secret replace the old ones.</p>'
-    :'<p class="warning">Removing the verifier BLOCKS level 3–5 commands on this target until a verifier is installed again.</p>';
+    :'<p class="warning">Removing the verifier BLOCKS level 3–5 commands (and level 1–2 commands with verification on) on this target until a verifier is installed again.</p>';
   shell(action==='install'?'Install integrity verifier':'Remove integrity verifier',intro+'<form id="verifier-root-form"><div class="callout"><strong>The sudo account doesn\'t have to be the command account.</strong><p>The verifier is always installed for the command account <strong>'+account+'</strong>. Enter any account on the same host that can become root, for example an admin account with sudo, or root itself. The master key you choose must be authorized for that account.</p><p><strong>Recommended:</strong> keep the command account without sudo rights. Unrestricted sudo on the command account would defeat the verifier.</p></div><label>Connect as SSH account (the account that runs sudo) <input name="installUsername" required value="'+account+'" autocomplete="off"></label><label>Using master key <select name="installKeyId">'+keys.map(k=>'<option value="'+escapeHtml(k.id)+'"'+(k.id===t?.sshKeyId?' selected':'')+'>'+escapeHtml(k.name)+(k.locked?' (locked)':'')+'</option>').join('')+'</select></label><label>sudo password of that account <input name="sudoPassword" type="password" autocomplete="off"></label><p><small>Used once to run the installer with sudo on the target and then discarded: farcmd never stores or logs it, and it is passed on the SSH session\'s standard input, never on a command line. Leave the password empty if that account is root or has passwordless sudo. Only use this if you trust the target account right now — its shell start-up files run before sudo. Otherwise use the manual root install script.</small></p><button>'+(action==='install'?'Install verifier':'Remove verifier')+'</button> <button type="button" id="verifier-cancel">Cancel</button></form><p id="verifier-error"></p>');
   document.querySelector('#verifier-cancel')!.addEventListener('click',()=>render('ssh'));
   document.querySelector<HTMLFormElement>('#verifier-root-form')!.onsubmit=async e=>{
@@ -244,7 +246,7 @@ async function commandsPage(){
     '<div class="pills">'+pill('Level '+c.level+' · '+LEVELS[c.level],c.level>=5?'bad':c.level>=4?'warn':'muted')+pill(targetName(c.targetId))+pill(c.type==='bash_script'?'Bash script':'Shell')+
       (c.enabled?'':pill('Disabled','warn'))+(c.commandKey?pill('Capability installed','ok'):pill('No capability'))+
       (c.level===5?pill(c.hasExecutionPassword?'Password set':'Password not set',c.hasExecutionPassword?'ok':'bad'):'')+
-      (c.level>=3&&c.integrityVerification!=='active'?pill('Blocked: no active verifier','bad'):'')+'</div>',
+      (c.level<3&&c.verifyIntegrity?pill('Verified','ok'):'')+(needsVerifier(c)&&c.integrityVerification!=='active'?pill('Blocked: no active verifier','bad'):'')+'</div>',
     // Workflow left to right: Edit -> Install -> Run. Editing is locked (target, type, content) while installed.
     '<div class="command-actions"><div class="flow">'+
       '<button class="small" data-edit-command="'+c.id+'"'+(c.commandKey?' title="Installed: target, type and content are locked. Uninstall to change them."':'')+'>'+(c.commandKey?'<span aria-hidden="true">🔒 </span>':'')+'Edit</button><span class="flow-arrow" aria-hidden="true">→</span>'+
@@ -260,8 +262,13 @@ async function commandsPage(){
     rows(commandRows,ts.length?'No commands yet.':'Add an SSH target before creating commands.')+'</article>');
 
   // Content, type and target cannot change while a capability is installed (the server refuses with 409).
+  const verifyHint=(level:number)=>level>=3?'Always on for levels 3–5.':'Optional for levels 1–2: the target\'s integrity verifier must confirm the installed script and authorized_keys before each run, otherwise the run is blocked.';
+  /** Levels 3–5 are always verified: show the box checked and locked; levels 1–2 restore the command's own choice. */
+  const wireVerify=(d:HTMLDialogElement,c?:any)=>{const level=d.querySelector<HTMLSelectElement>('select[name=level]')!,box=d.querySelector<HTMLInputElement>('input[name=verifyIntegrity]')!,hint=d.querySelector('[data-verify-hint]')!;
+    let own=!!c?.verifyIntegrity; box.onchange=()=>{if(!box.disabled)own=box.checked;};
+    level.onchange=()=>{const always=Number(level.value)>=3; box.disabled=always; box.checked=always||own; hint.textContent=verifyHint(Number(level.value));};};
   const commandFields=(c?:any)=>{const locked=!!c?.commandKey; const dis=locked?' disabled':'';
-    return (locked?'<p class="locked-note"><span aria-hidden="true">🔒 </span>The SSH capability is installed, so target, type and content are locked (shown as installed). Name, description, level and output setting can still be changed. Uninstall to change the rest.</p>':'')+
+    return (locked?'<p class="locked-note"><span aria-hidden="true">🔒 </span>The SSH capability is installed, so target, type and content are locked (shown as installed). Name, description, level, verification and output setting can still be changed. Uninstall to change the rest.</p>':'')+
       '<label>Name<input name="name" required maxlength="120" value="'+escapeHtml(c?.name??'')+'"></label>'+
       '<label>Description<textarea name="description" rows="2" maxlength="2000">'+escapeHtml(c?.description??'')+'</textarea></label>'+
       '<div class="field-row"><label>Target<select name="targetId" required'+dis+'>'+ts.map(t=>'<option value="'+escapeHtml(t.id)+'"'+(t.id===c?.targetId?' selected':'')+'>'+escapeHtml(t.name)+'</option>').join('')+'</select></label>'+
@@ -269,15 +276,17 @@ async function commandsPage(){
       '<label>Content<textarea name="content" rows="8" required spellcheck="false" class="mono" placeholder="Shell command or Bash script"'+dis+'>'+escapeHtml(c?.content??'')+'</textarea></label>'+
       '<label>Level<select name="level">'+[1,2,3,4,5].map(l=>'<option value="'+l+'"'+(l===(c?.level??1)?' selected':'')+'>'+l+' — '+LEVELS[l]+'</option>').join('')+'</select></label>'+
       (c?.level===5?'<p class="hint">Moving this command off level 5 clears its execution password.</p>':'')+
+      '<label class="check"><input type="checkbox" name="verifyIntegrity"'+(c?.verifyIntegrity||(c?.level??1)>=3?' checked':'')+((c?.level??1)>=3?' disabled':'')+'> Verify integrity before each run</label><p class="hint" data-verify-hint>'+verifyHint(c?.level??1)+'</p>'+
       '<label class="check"><input type="checkbox" name="showOutputOnApproval"'+(c?.showOutputOnApproval?' checked':'')+'> Show output after approval (levels 4–5)</label><p class="hint">Levels 1–3 always show their output when run from here. For levels 4–5, the approval page and Run show only the exit code unless this is on. The MCP client always gets the full result.</p>';};
   const commandBody=(form:HTMLFormElement)=>{const f=new FormData(form); const body:Record<string,unknown>={name:f.get('name'),description:f.get('description'),level:Number(f.get('level')),showOutputOnApproval:f.get('showOutputOnApproval')==='on'};
+    const verify=form.querySelector<HTMLInputElement>('input[name=verifyIntegrity]')!; if(!verify.disabled)body.verifyIntegrity=verify.checked; // levels 3–5: always on, keep the stored choice
     for(const k of ['targetId','type','content'])if(f.has(k))body[k]=f.get(k); // disabled fields are absent
     return body;};
   mcpAccessPanel();
-  on('#new-command',()=>formDialog('New command',commandFields(),'Create command',async form=>{
-    await api('/api/commands',{method:'POST',body:JSON.stringify(commandBody(form))}); commandsPage();}));
+  on('#new-command',()=>wireVerify(formDialog('New command',commandFields(),'Create command',async form=>{
+    await api('/api/commands',{method:'POST',body:JSON.stringify(commandBody(form))}); commandsPage();})));
   on('[data-edit-command]',b=>{const c=cs.find(x=>x.id===b.dataset.editCommand); if(!c)return;
-    formDialog(c.commandKey?'Edit command (installed)':'Edit command',commandFields(c),'Save',async form=>{await api('/api/commands/'+c.id,{method:'PATCH',body:JSON.stringify(commandBody(form))}); commandsPage();});});
+    wireVerify(formDialog(c.commandKey?'Edit command (installed)':'Edit command',commandFields(c),'Save',async form=>{await api('/api/commands/'+c.id,{method:'PATCH',body:JSON.stringify(commandBody(form))}); commandsPage();}),c);});
   on('[data-run-command]',b=>{const c=cs.find(x=>x.id===b.dataset.runCommand); if(c)runCommand({...c,targetName:targetName(c.targetId)});});
   on('[data-set-level5]',b=>{const c=cs.find(x=>x.id===b.dataset.setLevel5); if(!c)return;
     formDialog((c.hasExecutionPassword?'Change':'Set')+' execution password','<p class="hint">Level 5 commands run only after this password is entered on the confirmation page.</p><label>Password<input name="password" type="password" minlength="12" maxlength="1024" required autocomplete="new-password"></label><label>Repeat password<input name="repeat" type="password" required autocomplete="new-password"></label>','Save',async form=>{

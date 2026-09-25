@@ -218,20 +218,21 @@ function seedTarget(f:{db:any;userId:string}){
   return {targetId,keyId};
 }
 
-test('L3 execution without a verification authority is blocked before any SSH connection and recorded',async()=>{
+for(const [label,level,verifyIntegrity] of [['L3',3,false],['L1 with verification on',1,true]] as const)
+test(label+' execution without a verification authority is blocked before any SSH connection and recorded',async()=>{
   const f=fixture();
   const previous=process.env.FARCMD_ENCRYPTION_KEY; process.env.FARCMD_ENCRYPTION_KEY=Buffer.alloc(32,7).toString('base64');
   try{
     const {targetId}=seedTarget(f);
     const commands=new SqliteCommandStore(f.db); const commandId=randomUUID(); const content='echo hi';
-    commands.create({id:commandId,userId:f.userId,targetId,name:'mutating',description:'m',type:'shell',content,level:3,enabled:true,createdAt:Date.now(),updatedAt:Date.now()});
+    commands.create({id:commandId,userId:f.userId,targetId,name:'mutating',description:'m',type:'shell',content,level,verifyIntegrity,enabled:true,createdAt:Date.now(),updatedAt:Date.now()});
     const installId=randomUUID(); const script=buildFarcmdScript('http://localhost:5999',commandId,'shell',content);
     const line=buildCommandRestrictedAuthorizedKey('ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAItest',farcmdScriptPath('http://localhost:5999',commandId));
     new SqliteCommandKeyStore(f.db).create({id:installId,userId:f.userId,commandId,targetId,masterKeyId:randomUUID(),encryptedPrivateKey:encryptSecret('not-a-key','command-installation:'+f.userId+':'+installId),publicKey:'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAItest',fingerprint:'sha256:x',remoteScriptPath:farcmdScriptPath('http://localhost:5999',commandId),authorizedKeyLine:line,scriptContent:script,commandSha256:hashCommandContent('shell',content),scriptSha256:sha256Hex(script),authorizedKeySha256:sha256Hex(line),installedAt:Date.now(),createdAt:Date.now(),updatedAt:Date.now()});
-    new SqliteOAuthGrantStore(f.db).upsert(f.userId,'client','Client',[3],false);
+    new SqliteOAuthGrantStore(f.db).upsert(f.userId,'client','Client',[level],false);
     const connector=new FarcmdConnectorImpl(f.db,'http://localhost:5999');
     const started=Date.now();
-    await assert.rejects(()=>connector.executeCommand({userId:f.userId,clientId:'client',accessToken:'t'},commandId,3),/Integrity verification is unavailable/);
+    await assert.rejects(()=>connector.executeCommand({userId:f.userId,clientId:'client',accessToken:'t'},commandId,level),/Integrity verification is unavailable/);
     assert.ok(Date.now()-started<1000,'no network connection was attempted');
     const row=f.db.prepare('SELECT status,error FROM execution_history WHERE user_id=?').get(f.userId) as any;
     assert.equal(row.status,'blocked'); assert.match(row.error,/unavailable/);

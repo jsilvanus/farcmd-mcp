@@ -88,14 +88,14 @@ export class CapabilityVerificationService {
   }
 
   /**
-   * Execution gate for L3–L5. Resolves only if an active verification authority returned a fresh,
+   * Execution gate for L3–L5 and for L1–L2 commands that opt in. Resolves only if an active verification authority returned a fresh,
    * authenticated measurement in which the verifier, the account-level state and this command's
    * capability all match farcmd's records. Any other outcome throws: there is no unverified fallback.
    */
   /** Cheap local pre-check so that nothing is sent to the target when verification cannot possibly succeed. */
   assertAvailable(userId:string,target:SshTargetRecord):VerificationAuthorityRecord{
     const authority=this.authorities.getForTarget(userId,target.id);
-    if(!authority)throw new IntegrityVerificationUnavailable('Integrity verification is unavailable for this target (no verification authority installed); level 3–5 commands are blocked.');
+    if(!authority)throw new IntegrityVerificationUnavailable('Integrity verification is unavailable for this target (no verification authority installed); commands that require verification (levels 3–5, and levels 1–2 with verification on) are blocked.');
     if(authority.status!=='active')throw new IntegrityVerificationUnavailable('The verification authority for this target has not been activated; run "Verify now" in the farcmd web UI.');
     return authority;
   }

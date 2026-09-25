@@ -7,7 +7,7 @@ farcmd-mcp is an OAuth-protected [Model Context Protocol](https://modelcontextpr
 - **Five risk levels.** Levels 1–3 run at once; levels 4 and 5 need a person to approve each run in the browser (level 5 also needs the command's own password).
 - **Per-client visibility.** When you connect an MCP client you choose which levels it may see. Level 5 can be hidden from a client permanently.
 - **One key per command.** Each command gets its own Ed25519 key, pinned on the target with OpenSSH `restrict,command="…"` to one farcmd-managed script.
-- **Integrity checks.** Before a level 3–5 command runs, a root-owned verifier on the target proves with an HMAC over a fresh nonce that the script and `authorized_keys` are still exactly what farcmd installed. If the check fails, the command does not run.
+- **Integrity checks.** Before a level 3–5 command runs (and a level 1–2 command, if you turn it on), a root-owned verifier on the target proves with an HMAC over a fresh nonce that the script and `authorized_keys` are still exactly what farcmd installed. If the check fails, the command does not run.
 - **Audit trail.** Every security-relevant action goes into an HMAC-chained, tamper-evident audit log.
 
 Version: **1.0.0** · License: [EUPL-1.2](LICENSE)
@@ -59,11 +59,13 @@ The five levels:
 
 | Level | Meaning | Before it runs |
 |---|---|---|
-| 1 | Safe/read-only operations | — |
-| 2 | Low-impact operations | — |
+| 1 | Safe/read-only operations | integrity verification, if turned on for the command |
+| 2 | Low-impact operations | integrity verification, if turned on for the command |
 | 3 | Normal mutating operations | integrity verification |
 | 4 | High-impact operations | human approval in the browser + integrity verification |
 | 5 | Dangerous/destructive operations | human approval + the command's execution password + integrity verification |
+
+Integrity verification is optional for levels 1–2: tick **Verify integrity before each run** when you create or edit the command. It then needs the target's verifier, like levels 3–5, and is blocked without one.
 
 ---
 
@@ -259,7 +261,7 @@ After signing in you land on **Commands**. The navigation bar has these pages:
 
 | Page | What you do there |
 |---|---|
-| **Commands** | The **MCP access** bar at the top turns MCP off or on for your account. Create, edit, enable/disable and delete commands (name, description, target, level, *shell command* or *Bash script*). Install or remove each command's SSH capability, set the level-5 execution password, choose **Show output after approval** (levels 4–5), and **Run** a command directly from the browser. |
+| **Commands** | The **MCP access** bar at the top turns MCP off or on for your account. Create, edit, enable/disable and delete commands (name, description, target, level, *shell command* or *Bash script*). Install or remove each command's SSH capability, set the level-5 execution password, turn on **Verify integrity before each run** (optional for levels 1–2, always on for 3–5), choose **Show output after approval** (levels 4–5), and **Run** a command directly from the browser. |
 | **SSH** | **Master keys**: generate or upload (optionally passphrase-protected), unlock for 15 minutes, lock, rename, delete. **Targets**: host, port, account, master key and pinned **host fingerprint** (the connection test shows the fingerprint the server presents; unknown hosts are never trusted silently). **Integrity verifier** per target: install/repair automatically, download a manual root install script, verify now, remove. **Remote cleanup ledger**: capabilities that could not be removed yet, with a retry. |
 | **OAuth Sources** | Every MCP client you have authorized: last use, visible levels, permanently hide level 5, revoke. |
 | **History** | Every run, from MCP clients and from the web UI's Run, with source, level, exit status and duration, and output on request. Filter by text, level and source, and load more runs as needed. Also shows successful runs per command and a human-only view of a target's remote **shell history** (read with the master key). |
@@ -326,7 +328,7 @@ farcmd is a remote-execution gateway: whoever controls it can run every installe
 
 **Tampered targets are detected**
 - Target host keys are pinned, and unknown host keys are refused.
-- Level 3–5 runs are blocked unless the root-owned verifier returns a valid HMAC over a fresh nonce for the expected scripts and `authorized_keys`. See [`docs/capability-integrity.md`](docs/capability-integrity.md) for the threat model and TOCTOU analysis.
+- Level 3–5 runs, and level 1–2 runs with verification turned on, are blocked unless the root-owned verifier returns a valid HMAC over a fresh nonce for the expected scripts and `authorized_keys`. See [`docs/capability-integrity.md`](docs/capability-integrity.md) for the threat model and TOCTOU analysis.
 
 **Stolen tokens and database copies are limited**
 - Access tokens are HS256 JWTs bound to the issuer and resource and valid for 1 hour. Tokens of a disabled or deleted user are refused immediately.
@@ -358,7 +360,7 @@ farcmd is a remote-execution gateway: whoever controls it can run every installe
 - **Execution history is stored unencrypted.** The stdout/stderr of every run and the command content are kept in plaintext in SQLite. History is pruned after `FARCMD_EXECUTION_RETENTION_DAYS` (default 365). Lower that if your commands print sensitive data, and protect the database and backups as sensitive data. Results of approved level 4/5 runs that are waiting to be collected by the MCP client are deleted after a day.
 - **Anyone who has both the database and `FARCMD_ENCRYPTION_KEY` has every SSH key**, and anyone who has `JWT_SECRET` can mint access tokens. Both are passed in the environment, so they can be seen with `docker inspect` and in `/proc/<pid>/environ` by root or the service user. Restrict access to the host and to the Docker socket.
 - **Master keys are powerful.** A master key can write to `authorized_keys` on its targets. The recommended practice is to delete it when you have finished provisioning (see [Master keys: delete after provisioning](#master-keys-delete-after-provisioning)). Existing commands keep working without it. The remote shell-history view also uses the master key.
-- **Levels 1–2 are not integrity-verified.** Someone who controls the target account could change those scripts. Put anything that matters at level 3 or higher.
+- **Levels 1–2 are not integrity-verified by default.** Someone who controls the target account could change those scripts. Turn on **Verify integrity before each run** for them, or put anything that matters at level 3 or higher.
 - **Root on the target defeats the verifier.** Don't give the command account unrestricted sudo.
 - **No multi-factor authentication.** Accounts use a password (at least 12 characters). Put farcmd behind an SSO or VPN front door if you need MFA.
 - **Rate limits live in memory, in one process.** They reset on restart, and farcmd supports a single instance only. If `FARCMD_TRUST_PROXY` is wrong, all clients appear to come from the proxy's IP: they share one login budget, and audit IPs are wrong. Never set `FARCMD_TRUST_PROXY=true` when the app port is reachable other than through the proxy.
@@ -440,7 +442,7 @@ The workflow:
 
 A key generated in farcmd never leaves it, so once deleted it cannot be uploaded again. If you use one, remove its line from the target's `authorized_keys` after deleting it. For the next change you'll need a new key whose public key you add to the target.
 
-### Capability integrity verification (levels 3–5)
+### Capability integrity verification (levels 3–5, optional for 1–2)
 
 - Each target has a **verification authority**: a verification SSH key forced to a root-owned verifier through an argument-free sudoers rule, and a 32-byte HMAC secret that only root can read on the target (and that farcmd stores encrypted).
 - farcmd sends a fresh 256-bit nonce. The verifier measures the capability scripts, every `authorized_keys` entry sshd uses, and itself, and returns `HMAC-SHA256(secret, measurement)`. A fake verifier cannot read the secret, and an old response cannot be replayed.

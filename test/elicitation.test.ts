@@ -153,6 +153,13 @@ test('web Run: level rules, output hiding and audit, without reaching SSH',async
     assert.match((await run(l5)).json().error,/Execution password required/);
     const patched=await f.app.inject({method:'PATCH',url:'/api/commands/'+f.l4,headers:{cookie:cookieHeader},payload:{showOutputOnApproval:true}});
     assert.equal(patched.json().command.showOutputOnApproval,true);
+    // Optional integrity verification for levels 1–2; levels 3–5 always need it.
+    const listed=async()=>((await f.app.inject({method:'GET',url:'/api/commands',headers:{cookie:cookieHeader}})).json().commands as any[]);
+    assert.equal((await listed()).find(c=>c.id===f.l1).integrityVerification,'not-required');
+    const verified=await f.app.inject({method:'PATCH',url:'/api/commands/'+f.l1,headers:{cookie:cookieHeader},payload:{verifyIntegrity:true}});
+    assert.equal(verified.json().command.verifyIntegrity,true);
+    assert.equal((await listed()).find(c=>c.id===f.l1).integrityVerification,'unavailable');
+    assert.equal((await listed()).find(c=>c.id===f.l4).integrityVerification,'unavailable');
     const events=(f.db.prepare("SELECT outcome,details FROM security_events WHERE event='command.web_run' ORDER BY seq").all() as any[]);
     assert.equal(events.length,3); assert.ok(events.every(e=>e.outcome==='failure'));
     assert.equal((f.db.prepare("SELECT COUNT(*) AS n FROM execution_history").get() as any).n,0,'nothing ran');

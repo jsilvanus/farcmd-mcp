@@ -45,6 +45,7 @@ export class SqliteAuthStore implements AuthStore, WebSessionStore {
     try{this.db.exec("UPDATE command_installations SET remote_script_path='legacy',authorized_key_line=public_key WHERE remote_script_path='' AND authorized_key_line=''");}catch{}
     try{this.db.exec('ALTER TABLE commands ADD COLUMN execution_password_hash TEXT');}catch{}
     try{this.db.exec('ALTER TABLE commands ADD COLUMN show_output_on_approval INTEGER NOT NULL DEFAULT 0');}catch{}
+    try{this.db.exec('ALTER TABLE commands ADD COLUMN verify_integrity INTEGER NOT NULL DEFAULT 0');}catch{}
     try{this.db.exec('ALTER TABLE pending_executions ADD COLUMN exit_code INTEGER');}catch{}
     try{this.db.exec('ALTER TABLE pending_executions ADD COLUMN stdout TEXT');}catch{}
     try{this.db.exec('ALTER TABLE pending_executions ADD COLUMN stderr TEXT');}catch{}

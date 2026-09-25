@@ -6,7 +6,7 @@ import { executeSshCommand, openSshSession, sha256Hex, type SshExecResult, type 
 import { CapabilityVerificationService } from './capability-verification.js';
 import { AuditLog, type AuditActor, type AuditOutcome } from './audit.js';
 import { SqliteSshStore } from './storage/ssh.js';
-import { SqliteCommandStore, type CommandLevel, hashCommandContent } from './command-registry.js';
+import { SqliteCommandStore, type CommandLevel, hashCommandContent, requiresIntegrityVerification } from './command-registry.js';
 import { SqliteCommandInstallationStore } from './storage/command-installations.js';
 import { SqliteOAuthGrantStore } from './oauth/grants.js';
 import { SqliteExecutionStore, confirmationForLevel, type ConfirmationRequirement } from './execution.js';
@@ -130,7 +130,7 @@ export class FarcmdConnectorImpl implements FarcmdConnector {
     const config={hostname:target.hostname,port:target.port,username:target.username,hostFingerprint:target.hostFingerprint};
     const startedAt=Date.now();
     let result:SshExecResult;
-    if(level>=3){
+    if(requiresIntegrityVerification(command)){
       // Remote integrity verification immediately before execution. The execution connection is
       // authenticated concurrently (authentication runs nothing on the target), and its exec request is
       // sent only after verification succeeded, keeping the check-to-use window to one channel round trip.
