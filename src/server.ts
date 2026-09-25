@@ -17,6 +17,7 @@ import { auditRetentionMs } from './audit.js';
 import { parseTrustProxy, productionConfigProblems } from './config.js';
 import { executionLimits } from './limits.js';
 import { contentSecurityPolicy } from './csp.js';
+import { VERSION } from './version.js';
 
 const problems=productionConfigProblems(process.env);
 if(problems.length)throw new Error('Refusing to start with an unsafe production configuration:\n- '+problems.join('\n- '));
@@ -48,5 +49,5 @@ await mountOAuthMetadata(app,publicUrl);
 await mountAuthorizationServer(app,publicUrl,publicUrl+'/mcp',secret,store,users);
 await mountMcpHttp(app,{connector:new FarcmdConnectorImpl(store.getDatabase(),publicUrl),publicUrl,jwtSecret:secret,resource:publicUrl+'/mcp',isUserActive:id=>isActiveUser(users.getUser(id))});
 app.get('/health',{logLevel:'silent'},async()=>({ok:true}));
-app.get('/',async(_request,reply)=>{if(process.env.NODE_ENV==='production')return reply.sendFile('index.html');return {name:'farcmd-mcp',version:'0.2.0',mcp:'/mcp',web:'/'};});
+app.get('/',async(_request,reply)=>{if(process.env.NODE_ENV==='production')return reply.sendFile('index.html');return {name:'farcmd-mcp',version:VERSION,mcp:'/mcp',web:'/'};});
 await app.listen({host:process.env.HOST??'0.0.0.0',port});

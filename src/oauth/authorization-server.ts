@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import { verify } from '@node-rs/argon2';
+import { loginRateLimit, verifyPassword } from '../login-rate-limit.js';
 import { isActiveUser, type AuthStore, type UserStore } from '../storage/interface.js';
 import { fetchCimdMetadata, isCimdClientId } from './cimd.js';
 import { randomToken, verifyS256 } from './pkce.js';
@@ -35,7 +35,7 @@ export async function mountAuthorizationServer(app:FastifyInstance,issuer:string
   let q:Record<string,string|undefined>;let metadata:Awaited<ReturnType<typeof validateRequest>>;let userId:string;
   try{
    if(body.session){const session=authStore.oauthTokens().getLoginSession(String(body.session));if(!session||session.expires<Date.now())throw new Error('Expired login session');q=decodeOAuth(session.oauth);userId=session.userId;}
-   else{q=decodeOAuth(body.oauth as string);if(!body.email||!body.password)throw new Error('Login required');const user=users.getUserByEmail(body.email as string);if(!user?.passwordHash||!isActiveUser(user)||!(await verify(user.passwordHash,body.password as string))){authStore.recordSecurityEvent?.(user?.id,q.client_id,'oauth.login',{email:String(body.email).slice(0,320),ip:request.ip},'failure');return reply.code(401).type('text/html').send(loginPage(body.oauth as string,'Invalid email or password.'));}userId=user.id;}
+   else{q=decodeOAuth(body.oauth as string);if(!body.email||!body.password)throw new Error('Login required');if(!loginRateLimit(request.ip)){authStore.recordSecurityEvent?.(undefined,q.client_id,'oauth.login',{reason:'rate limited',ip:request.ip},'failure');return reply.code(429).type('text/html').send(loginPage(body.oauth as string,'Too many sign-in attempts. Try again later.'));}const user=users.getUserByEmail(String(body.email).trim());if(!(await verifyPassword(user?.passwordHash,String(body.password)))||!user||!isActiveUser(user)){authStore.recordSecurityEvent?.(user?.id,q.client_id,'oauth.login',{email:String(body.email).slice(0,320),ip:request.ip},'failure');return reply.code(401).type('text/html').send(loginPage(body.oauth as string,'Invalid email or password.'));}userId=user.id;}
    metadata=await validateRequest(q);
   }catch{return reply.code(400).type('text/html').send(page('Invalid request','<h1>Invalid authorization request</h1>'));}
   const user=users.getUser(userId);if(!isActiveUser(user))return reply.code(401).type('text/html').send(page('Invalid account','<h1>Invalid account</h1>'));

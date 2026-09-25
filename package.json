@@ -1,9 +1,15 @@
 {
   "name": "@jsilvanus/farcmd-mcp",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
   "description": "OAuth-protected MCP server for predefined SSH command capabilities.",
+  "license": "EUPL-1.2",
+  "author": "jsilvanus",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jsilvanus/farcmd-mcp.git"
+  },
   "engines": {
     "node": ">=22"
   },

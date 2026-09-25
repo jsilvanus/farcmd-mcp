@@ -5,6 +5,7 @@ import { z } from 'zod';
 import type { FarcmdConnector, ConnectorContext, PendingConfirmation } from '../connector.js';
 import { requestUrlElicitation, supportsUrlElicitation } from './elicitation.js';
 import type { CommandLevel } from '../command-registry.js';
+import { VERSION } from '../version.js';
 
 type Extra=RequestHandlerExtra<ServerRequest,ServerNotification>;
 const oauthSecuritySchemes=[{type:'oauth2' as const,scopes:['mcp']}];
@@ -65,7 +66,7 @@ async function approveInBrowser(options:McpServerOptions,context:ConnectorContex
 }
 
 export function createMcpServer(options:McpServerOptions):McpServer{
-  const server=new McpServer({name:'farcmd-mcp',version:'0.2.0'});
+  const server=new McpServer({name:'farcmd-mcp',version:VERSION});
   server.registerTool('farcmd_health',security({description:'Verify that the authenticated farcmd MCP endpoint is reachable.',inputSchema:{}}),async(_args,extra)=>{
     try{return result(await options.connector.health(contextFromExtra(extra)));}catch(error){return errorResult(error);}
   });

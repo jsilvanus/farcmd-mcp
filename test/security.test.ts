@@ -258,3 +258,24 @@ test('MCP discovery exposes command metadata only: no content, keys, verifier or
     assert.deepEqual(tools,['command_level_1','command_level_2','command_level_3','command_level_4','command_level_5','farcmd_health','list_commands']);
   } finally { cleanup(f); }
 });
+
+test('web session tokens are stored only as hashes, and legacy plaintext rows are migrated',()=>{
+  const f=fixture();
+  try{
+    const token='legacy-session-token-'+randomUUID();
+    f.db.prepare('INSERT INTO web_sessions (token,user_id,expires) VALUES (?,?,?)').run(token,f.userId,Date.now()+60_000);
+    const restarted=new SqliteAuthStore(join(f.dir,'app.sqlite'));
+    assert.ok(!JSON.stringify(f.db.prepare('SELECT * FROM web_sessions').all()).includes(token),'plaintext replaced by its hash');
+    assert.equal(restarted.getWebSession(token)?.userId,f.userId,'the legacy session keeps working');
+    const fresh='fresh-'+randomUUID(); restarted.saveWebSession({token:fresh,userId:f.userId,expires:Date.now()+60_000});
+    assert.ok(!JSON.stringify(f.db.prepare('SELECT * FROM web_sessions').all()).includes(fresh));
+    assert.equal(restarted.getWebSession(fresh)?.token,fresh);
+    restarted.deleteWebSession(fresh); assert.equal(restarted.getWebSession(fresh),undefined);
+  }finally{cleanup(f);}
+});
+
+test('CIMD fetches refuse private, reserved and IPv4-mapped addresses',async()=>{
+  const { privateIp }=await import('../src/oauth/cimd.js');
+  for(const a of ['127.0.0.1','10.0.0.1','172.16.5.4','192.168.1.1','169.254.169.254','100.64.0.1','0.0.0.0','224.0.0.1','::','::1','fd00::1','fe80::1','::ffff:127.0.0.1','::ffff:a9fe:a9fe','64:ff9b::7f00:1','not-an-ip'])assert.equal(privateIp(a),true,a);
+  for(const a of ['93.184.215.14','1.1.1.1','2606:4700:4700::1111','::ffff:8.8.8.8'])assert.equal(privateIp(a),false,a);
+});

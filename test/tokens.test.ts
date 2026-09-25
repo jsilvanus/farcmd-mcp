@@ -151,3 +151,21 @@ test('authorization flow: sign-in session is kept in SQLite, survives a restart 
     f.done();
   }finally{globalThis.fetch=realFetch;rmSync(dir,{recursive:true,force:true});}
 });
+
+test('OAuth sign-in form is rate limited per IP, sharing the web login budget',async()=>{
+  const dir=mkdtempSync(join(tmpdir(),'farcmd-oauth-limit-'));
+  const client='https://93.184.215.14/client.json'; const redirect='https://93.184.215.14/cb';
+  const realFetch=globalThis.fetch;
+  globalThis.fetch=(async(input:any,init?:any)=>String(input)===client?new Response(JSON.stringify({client_id:client,client_name:'Test client',redirect_uris:[redirect]}),{headers:{'content-type':'application/json'}}):realFetch(input,init)) as typeof fetch;
+  try{
+    const f=await fixture(dir);
+    const oauth=Buffer.from(new URLSearchParams({response_type:'code',client_id:client,redirect_uri:redirect,code_challenge:'x',code_challenge_method:'S256'}).toString()).toString('base64url');
+    const app=Fastify(); await app.register(formbody); await mountAuthorizationServer(app,ISSUER,ISSUER+'/mcp',randomBytes(32),f.store,new SqliteUserStore(f.db));
+    const attempt=()=>app.inject({method:'POST',url:'/oauth/authorize',remoteAddress:'203.0.113.77',payload:{oauth,email:'nobody@example.test',password:'wrong password'}});
+    for(let i=0;i<8;i++)assert.equal((await attempt()).statusCode,401);
+    assert.equal((await attempt()).statusCode,429,'the ninth attempt within 15 minutes is refused');
+    const other=await app.inject({method:'POST',url:'/oauth/authorize',remoteAddress:'203.0.113.78',payload:{oauth,email:'nobody@example.test',password:'wrong password'}});
+    assert.equal(other.statusCode,401,'other IPs are unaffected');
+    f.done();
+  }finally{globalThis.fetch=realFetch;rmSync(dir,{recursive:true,force:true});}
+});

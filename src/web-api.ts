@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import { hash, verify } from '@node-rs/argon2';
+import { hash } from '@node-rs/argon2';
+import { loginRateLimit, rateLimit, verifyPassword } from './login-rate-limit.js';
 import { randomToken } from './oauth/pkce.js';
 import { isActiveUser, type UserStore, type WebSessionStore } from './storage/interface.js';
 import { SqliteSettingsStore } from './storage/settings.js';
@@ -26,19 +27,8 @@ import { isCommandLevel } from './command-levels.js';
 import { AuditLog, type AuditOutcome } from './audit.js';
 import { createHash } from 'node:crypto';
 
-const attempts=new Map<string,{count:number;reset:number}>();
-const MAX_ATTEMPTS=8;
-const WINDOW=15*60_000;
 const confirmationAttempts=new Map<string,{count:number;reset:number}>();
-function confirmationRateLimit(key:string):boolean{return rateLimitMap(confirmationAttempts,key,5,15*60_000);}
-function rateLimitMap(map:Map<string,{count:number;reset:number}>,key:string,max:number,window:number):boolean{const now=Date.now();const current=map.get(key);if(!current||current.reset<=now){map.set(key,{count:1,reset:now+window});return true;}current.count++;return current.count<=max;}
-
-function rateLimit(key:string): boolean {
-  const now=Date.now(); const current=attempts.get(key);
-  if (!current || current.reset<=now) { attempts.set(key,{count:1,reset:now+WINDOW}); return true; }
-  current.count++;
-  return current.count<=MAX_ATTEMPTS;
-}
+function confirmationRateLimit(key:string):boolean{return rateLimit(key,5,15*60_000,confirmationAttempts);}
 function cleanEmail(email:string): string { return email.trim().toLowerCase(); }
 function publicUser(user:{id:string;name:string;email?:string;createdAt:number}) {
   return {id:user.id,name:user.name,email:user.email,createdAt:user.createdAt};
@@ -351,14 +341,14 @@ export async function mountWebApi(app:FastifyInstance, users:UserStore, sessionS
     return {user:publicUser(user)};
   });
   app.post('/api/auth/login',async (request,reply)=>{
-    const ip=request.ip; if(!rateLimit(ip)) return reply.code(429).send({error:'Too many login attempts. Try again later.'});
+    const ip=request.ip; if(!loginRateLimit(ip)) return reply.code(429).send({error:'Too many login attempts. Try again later.'});
     const b=request.body as Record<string,unknown>;
     const email=typeof b.email==='string'?cleanEmail(b.email):'';
     const password=typeof b.password==='string'?b.password:'';
     const user=users.getUserByEmail(email);
     // Failed attempts are attributed to the targeted account (if it exists) so its owner can see them.
     request.auditUserId=user?.id;
-    if(!user?.passwordHash || !(await verify(user.passwordHash,password))) return reply.code(401).send({error:'Invalid email or password'});
+    if(!(await verifyPassword(user?.passwordHash,password))) return reply.code(401).send({error:'Invalid email or password'});
     if(!isActiveUser(user)) return reply.code(403).send({error:'This account is disabled.'});
     const token=sessions.create(user.id);
     reply.setCookie('farcmd_session',token,cookieOptions());

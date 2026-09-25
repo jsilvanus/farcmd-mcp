@@ -5,7 +5,7 @@ import { DatabaseSync } from 'node:sqlite';
 import type { AuthStore, McpUser, UserStore, WebSessionRecord, WebSessionStore } from './interface.js';
 import { SqliteOAuthGrantStore } from '../oauth/grants.js';
 import { AuditLog, migrateAuditTable, type AuditOutcome } from '../audit.js';
-import { SqliteOAuthTokenStore, migrateOAuthTokenTables } from '../oauth/tokens.js';
+import { SqliteOAuthTokenStore, hashToken, migrateOAuthTokenTables } from '../oauth/tokens.js';
 import { migrateMcpAccess } from '../mcp-access.js';
 
 export class SqliteAuthStore implements AuthStore, WebSessionStore {
@@ -56,6 +56,8 @@ export class SqliteAuthStore implements AuthStore, WebSessionStore {
     migrateOAuthTokenTables(this.db);
     migrateMcpAccess(this.db);
     try{this.db.exec('ALTER TABLE users ADD COLUMN disabled_at INTEGER');}catch{}
+    // Web session tokens are stored as SHA-256 hashes (64 hex chars), like OAuth tokens: a database copy yields no usable sessions.
+    try{const legacy=this.db.prepare('SELECT token FROM web_sessions WHERE length(token)<>64').all() as {token:string}[];const update=this.db.prepare('UPDATE web_sessions SET token=? WHERE token=?');for(const row of legacy)update.run(hashToken(row.token),row.token);this.db.prepare('DELETE FROM web_sessions WHERE expires<?').run(Date.now());}catch{}
     // Instance-wide settings managed by the operator (farcmd-admin CLI). Absent keys mean the secure default.
     this.db.exec('CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY,value TEXT NOT NULL,updated_at INTEGER NOT NULL)');
     this.db.exec('UPDATE oauth_grants SET visible_levels=allowed_levels WHERE visible_levels=\'\' AND allowed_levels<>\'\';UPDATE oauth_grants SET level5_permanently_hidden=level5_permanently_denied WHERE level5_permanently_denied=1 AND level5_permanently_hidden=0;');
@@ -71,12 +73,12 @@ export class SqliteAuthStore implements AuthStore, WebSessionStore {
   listOAuthGrants(u:string){return this.grants().list(u);}
   touchOAuthGrant(u:string,c:string){this.grants().touch(u,c);}
   oauthTokens():SqliteOAuthTokenStore{return new SqliteOAuthTokenStore(this.db);}
-  saveWebSession(r:WebSessionRecord):void{this.db.prepare('INSERT INTO web_sessions (token,user_id,expires) VALUES (?,?,?)').run(r.token,r.userId,r.expires);}
+  saveWebSession(r:WebSessionRecord):void{this.db.prepare('DELETE FROM web_sessions WHERE expires<?').run(Date.now());this.db.prepare('INSERT INTO web_sessions (token,user_id,expires) VALUES (?,?,?)').run(hashToken(r.token),r.userId,r.expires);}
   getWebSession(token:string):WebSessionRecord|undefined{
-    const r=this.db.prepare('SELECT * FROM web_sessions WHERE token=?').get(token) as any;
-    return r?{token:r.token,userId:r.user_id,expires:r.expires}:undefined;
+    const r=this.db.prepare('SELECT * FROM web_sessions WHERE token=?').get(hashToken(token)) as any;
+    return r?{token,userId:r.user_id,expires:r.expires}:undefined;
   }
-  deleteWebSession(token:string):void{this.db.prepare('DELETE FROM web_sessions WHERE token=?').run(token);}
+  deleteWebSession(token:string):void{this.db.prepare('DELETE FROM web_sessions WHERE token=?').run(hashToken(token));}
 }
 export class SqliteUserStore implements UserStore {
   constructor(private readonly db:DatabaseSync){}
