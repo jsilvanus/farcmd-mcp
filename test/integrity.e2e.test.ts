@@ -360,6 +360,11 @@ sys.stdout.write(body + "mac " + hmac.new(os.urandom(32), body.encode(), hashlib
       assert.equal(removed.body.removed,false); assert.match(removed.body.uninstallScript,/rm -f/);
       await assert.rejects(()=>run(cmdA,3),/Integrity verification is unavailable/);
       assert.equal(((await run(cmdL1,1)) as any).stdout,'level-one\n');
+      // A level 1 command that opted in to verification is blocked like level 3.
+      assert.equal((await api('PATCH','/api/commands/'+cmdL1,{verifyIntegrity:true})).status,200);
+      await assert.rejects(()=>run(cmdL1,1),/Integrity verification is unavailable/);
+      assert.equal((await api('PATCH','/api/commands/'+cmdL1,{verifyIntegrity:false})).status,200);
+      assert.equal(((await run(cmdL1,1)) as any).stdout,'level-one\n');
       must('sh -s',removed.body.uninstallScript);
       assert.equal(existsSync(paths.program)||existsSync(paths.secret)||existsSync(paths.sudoers),false);
     });
