@@ -346,7 +346,7 @@ farcmd is a remote-execution gateway: whoever controls it can run every installe
 - **Command output goes to the AI provider.** stdout and stderr are returned to the MCP client and so reach its model provider. Don't expose commands that print secrets. Output can also carry prompt-injection text back into the conversation.
 - **Execution history is stored unencrypted.** The stdout/stderr of every run and the command content are kept in plaintext in SQLite. History is pruned after `FARCMD_EXECUTION_RETENTION_DAYS` (default 365). Lower that if your commands print sensitive data, and protect the database and backups as sensitive data. Results of approved level 4/5 runs that are waiting to be collected by the MCP client are deleted after a day.
 - **Anyone who has both the database and `FARCMD_ENCRYPTION_KEY` has every SSH key**, and anyone who has `JWT_SECRET` can mint access tokens. Both are passed in the environment, so they can be seen with `docker inspect` and in `/proc/<pid>/environ` by root or the service user. Restrict access to the host and to the Docker socket.
-- **Master keys are powerful.** A master key can write to `authorized_keys` on its targets. Use passphrase-protected master keys, keep them locked, or delete them after provisioning (existing commands keep working). The remote shell-history view also uses the master key.
+- **Master keys are powerful.** A master key can write to `authorized_keys` on its targets. The recommended practice is to delete it when you have finished provisioning (see [Master keys: delete after provisioning](#master-keys-delete-after-provisioning)). Existing commands keep working without it. The remote shell-history view also uses the master key.
 - **Levels 1–2 are not integrity-verified.** Someone who controls the target account could change those scripts. Put anything that matters at level 3 or higher.
 - **Root on the target defeats the verifier.** Don't give the command account unrestricted sudo.
 - **No multi-factor authentication.** Accounts use a password (at least 12 characters). Put farcmd behind an SSO or VPN front door if you need MFA.
@@ -404,6 +404,29 @@ Layout: `src/` server (`mcp/` MCP transport and tools, `oauth/` authorization se
 - Changing a command's content or target requires the capability to be replaced. Without a master key, existing capabilities still run, but replacing or removing them is deferred.
 - Deleting a command or capability always works. If farcmd cannot remove the remote entry and script right away, it records them in the **remote cleanup ledger** and retries once a master key is available.
 - Deleting or replacing a master key does not affect installed capabilities. It only removes farcmd's ability to provision and revoke on that target.
+
+#### Master keys: delete after provisioning
+
+A master key is needed only to change things on a target. **The recommended practice is to delete it when you have finished and add it again for the next change.** Then a compromised farcmd can run only the commands already installed, and cannot write to `authorized_keys`.
+
+| Without a master key | Still works | Needs a master key again |
+|---|---|---|
+| Running installed commands (MCP and web) | ✓ | |
+| Integrity verification of level 3–5 commands | ✓ (uses the verifier key) | |
+| Removing a command or capability | ✓ (recorded in the cleanup ledger, removed later) | |
+| Installing the verifier with the manual root script | ✓ | |
+| Installing, replacing or removing capabilities on the target | | ✓ |
+| Automatic verifier install or repair, ledger cleanup, shell history, target Test | | ✓ |
+
+The workflow:
+
+1. Keep your own **passphrase-protected** master key safely outside farcmd, and put its public key in the target account's `authorized_keys`.
+2. When you need to make a change, **upload** the key on the SSH page and unlock it.
+3. If the target shows **No master key: provisioning off**, click **Edit** on the target and select the key.
+4. Make your changes: install commands, clean up the ledger, and so on.
+5. **Delete** the master key.
+
+A key generated in farcmd never leaves it, so once deleted it cannot be uploaded again. If you use one, remove its line from the target's `authorized_keys` after deleting it. For the next change you'll need a new key whose public key you add to the target.
 
 ### Capability integrity verification (levels 3–5)
 
