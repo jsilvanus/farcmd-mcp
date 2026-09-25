@@ -234,6 +234,17 @@ farcmd uses the stateless Streamable HTTP transport: `POST /mcp` only (`GET` and
 
 A run returns the exit code, signal, duration, stdout and stderr (up to `FARCMD_MAX_OUTPUT_BYTES`).
 
+**Tool hints.** Every tool has a `title` and MCP annotations derived from its level. Clients use these to decide, for example, whether to ask before a call:
+
+| Tool | `readOnlyHint` | `destructiveHint` | `idempotentHint` | `openWorldHint` |
+|---|---|---|---|---|
+| `farcmd_health`, `list_commands` | true | false | true | false |
+| `command_level_1` | **true** | false | true | true |
+| `command_level_2`, `command_level_3` | false | false | false | true |
+| `command_level_4`, `command_level_5` | false | true | false | true |
+
+Hints are advisory. farcmd can't inspect what a script does, so they are only as accurate as the level a person assigned. Because level 1 is marked read-only, **some clients run level 1 commands without asking**. Put a command at level 1 only if it truly changes nothing.
+
 **Level 4 and 5 approvals.** Calling a level 4 or 5 tool never runs the command right away. It creates an approval request that is valid for 5 minutes:
 
 - **Clients that support URL elicitation** show the approval link to the person directly. The call stays open (with progress notifications every 15 s when the client sent a progress token) until the person approves in the browser, and then returns the result. If the person declines the link in the client, the request is cancelled.
@@ -343,7 +354,7 @@ farcmd is a remote-execution gateway: whoever controls it can run every installe
 
 ### Known limitations and residual risks
 
-- **The AI decides when to run levels 1–3.** A client that has been tricked by prompt injection (for example through a web page, an email or a command's own output) can run any level 1–3 command it can see, without asking. Put only commands you would let the model run unattended at those levels, and grant each client the fewest levels it needs.
+- **The AI decides when to run levels 1–3.** Level 1 tools carry `readOnlyHint: true`, so some clients run them without asking at all. A client that has been tricked by prompt injection (for example through a web page, an email or a command's own output) can run any level 1–3 command it can see, without asking. Put only commands you would let the model run unattended at those levels, and grant each client the fewest levels it needs.
 - **Command output goes to the AI provider.** stdout and stderr are returned to the MCP client and so reach its model provider. Don't expose commands that print secrets. Output can also carry prompt-injection text back into the conversation.
 - **Execution history is stored unencrypted.** The stdout/stderr of every run and the command content are kept in plaintext in SQLite. History is pruned after `FARCMD_EXECUTION_RETENTION_DAYS` (default 365). Lower that if your commands print sensitive data, and protect the database and backups as sensitive data. Results of approved level 4/5 runs that are waiting to be collected by the MCP client are deleted after a day.
 - **Anyone who has both the database and `FARCMD_ENCRYPTION_KEY` has every SSH key**, and anyone who has `JWT_SECRET` can mint access tokens. Both are passed in the environment, so they can be seen with `docker inspect` and in `/proc/<pid>/environ` by root or the service user. Restrict access to the host and to the Docker socket.

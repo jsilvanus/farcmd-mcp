@@ -5,6 +5,7 @@ import { z } from 'zod';
 import type { FarcmdConnector, ConnectorContext, PendingConfirmation } from '../connector.js';
 import { requestUrlElicitation, supportsUrlElicitation } from './elicitation.js';
 import type { CommandLevel } from '../command-registry.js';
+import { COMMAND_LEVELS } from '../command-levels.js';
 import { VERSION } from '../version.js';
 
 type Extra=RequestHandlerExtra<ServerRequest,ServerNotification>;
@@ -15,6 +16,19 @@ function contextFromExtra(extra:Extra):ConnectorContext{
   if(typeof userId!=='string'||!auth?.token||!auth.clientId)throw new Error('Authentication required.');
   return {userId,accessToken:auth.token,clientId:auth.clientId};
 }
+/**
+ * MCP tool annotations per command level. They are hints for the client (for example whether to ask before a
+ * call), not guarantees: farcmd cannot inspect what a script does, so they rest on the level a person assigned.
+ * Level 1 is by definition safe/read-only, so it is marked read-only; clients may run it without asking.
+ */
+export const LEVEL_ANNOTATIONS:Record<CommandLevel,{readOnlyHint:boolean;destructiveHint:boolean;idempotentHint:boolean;openWorldHint:boolean}>={
+  1:{readOnlyHint:true,destructiveHint:false,idempotentHint:true,openWorldHint:true},
+  2:{readOnlyHint:false,destructiveHint:false,idempotentHint:false,openWorldHint:true},
+  3:{readOnlyHint:false,destructiveHint:false,idempotentHint:false,openWorldHint:true},
+  4:{readOnlyHint:false,destructiveHint:true,idempotentHint:false,openWorldHint:true},
+  5:{readOnlyHint:false,destructiveHint:true,idempotentHint:false,openWorldHint:true},
+};
+const LOCAL_READ_ONLY={readOnlyHint:true,destructiveHint:false,idempotentHint:true,openWorldHint:false};
 function security<T extends object>(config:T):T&{securitySchemes:typeof oauthSecuritySchemes}{return {...config,securitySchemes:oauthSecuritySchemes};}
 function result(value:unknown):CallToolResult{return {content:[{type:'text',text:JSON.stringify(value,null,2)}]};}
 function errorResult(error:unknown):CallToolResult{return {content:[{type:'text',text:error instanceof Error?error.message:String(error)}],isError:true};}
@@ -67,17 +81,20 @@ async function approveInBrowser(options:McpServerOptions,context:ConnectorContex
 
 export function createMcpServer(options:McpServerOptions):McpServer{
   const server=new McpServer({name:'farcmd-mcp',version:VERSION});
-  server.registerTool('farcmd_health',security({description:'Verify that the authenticated farcmd MCP endpoint is reachable.',inputSchema:{}}),async(_args,extra)=>{
+  server.registerTool('farcmd_health',security({title:'Check farcmd connection',annotations:{title:'Check farcmd connection',...LOCAL_READ_ONLY},description:'Verify that the authenticated farcmd MCP endpoint is reachable.',inputSchema:{}}),async(_args,extra)=>{
     try{return result(await options.connector.health(contextFromExtra(extra)));}catch(error){return errorResult(error);}
   });
   server.registerTool('list_commands',security({
+    title:'List farcmd commands',annotations:{title:'List farcmd commands',...LOCAL_READ_ONLY},
     description:'List predefined SSH capabilities. Returns command metadata only; the stored shell command is never exposed.',
     inputSchema:{},
   }),async(_args,extra)=>{
     try{return result({commands:await options.connector.listCommands(contextFromExtra(extra))});}catch(error){return errorResult(error);}
   });
   const registerLevel=(level:CommandLevel)=>{
+    const title='Run level '+level+' command ('+COMMAND_LEVELS[level].toLowerCase()+')';
     server.registerTool('command_level_'+level,security({
+      title,annotations:{title,...LEVEL_ANNOTATIONS[level]},
       description:'Execute one predefined SSH command. OAuth controls whether the command level is exposed; levels 4 and 5 require separate human confirmation in the farcmd web UI. Clients that support URL elicitation show the approval link and receive the result in this same call; otherwise the result contains approvalUrl and confirmationToken: after the person has approved, call again with the same commandId and the confirmationToken. Input is only a command ID; the server keeps the exact shell command private.',
       inputSchema:{commandId:z.string().uuid().describe('ID of the predefined command capability'),confirmationToken:z.string().optional().describe('Return the result of a previously human-confirmed level 4 or 5 execution')},
     }),async(args,extra)=>{
