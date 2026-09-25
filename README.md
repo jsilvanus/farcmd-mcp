@@ -91,6 +91,8 @@ ghcr.io/jsilvanus/farcmd-mcp:1       # latest 1.x
 ghcr.io/jsilvanus/farcmd-mcp:latest
 ```
 
+#### Option A: with the repository's compose files
+
 ```sh
 git clone https://github.com/jsilvanus/farcmd-mcp.git && cd farcmd-mcp
 cp .env.example .env
@@ -109,6 +111,40 @@ docker compose exec farcmd farcmd-admin user create --email you@example.org --na
 ```
 
 `docker compose up -d --build` builds the image from the checkout instead of pulling it. An nginx site example is in [`deploy/nginx/farcmd.conf`](deploy/nginx/farcmd.conf). It sets up TLS, forwarded headers, and `proxy_buffering off` with long timeouts for MCP streams.
+
+#### Option B: image only, no clone
+
+This option needs only Docker and `openssl`. The secrets are generated **once** into an `.env` file. Don't put `$(openssl rand …)` directly on the `docker run` line: every re-run would then create new keys. A new `FARCMD_ENCRYPTION_KEY` makes the stored SSH keys unreadable, and a new `JWT_SECRET` signs out every MCP client.
+
+```sh
+mkdir -p ~/farcmd && cd ~/farcmd
+umask 077
+cat > .env <<EOF
+MCP_PUBLIC_URL=https://farcmd.example.org
+JWT_SECRET=$(openssl rand -base64 32)
+FARCMD_ENCRYPTION_KEY=$(openssl rand -base64 32)
+# Docker's default bridge gateway, which is where the host's reverse proxy connects from
+FARCMD_TRUST_PROXY=172.17.0.1
+EOF
+
+docker run -d --name farcmd --restart unless-stopped \
+  --env-file .env \
+  -v farcmd-data:/data \
+  -p 127.0.0.1:5999:5999 \
+  ghcr.io/jsilvanus/farcmd-mcp:1
+
+# create the first account (prompts for the password)
+docker exec -it farcmd farcmd-admin user create --email you@example.org --name "You"
+```
+
+Then point your reverse proxy at `http://127.0.0.1:5999` (the nginx example above works as is). Check the gateway address with `docker network inspect bridge -f '{{(index .IPAM.Config 0).Gateway}}'`. Back up `.env` somewhere safe, separately from the data volume.
+
+To upgrade, pull the new image and recreate the container. The data stays in the `farcmd-data` volume:
+
+```sh
+docker pull ghcr.io/jsilvanus/farcmd-mcp:1
+docker rm -f farcmd   # then run the same docker run command again
+```
 
 The image runs as the unprivileged `node` user, keeps all state in the `/data` volume, has a `HEALTHCHECK` on `/health`, and puts `farcmd-admin` on `PATH`.
 
