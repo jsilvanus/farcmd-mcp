@@ -286,6 +286,7 @@ farcmd-admin audit verify
 
 - Passwords are never accepted as arguments, because they would end up in shell history and the process list. They are read from a hidden prompt, or from the first line of stdin with `--password-stdin`.
 - **Registration is off by default.** `farcmd-admin registration enable` shows a sign-up link in the web UI.
+- **farcmd never sends email.** The email address is only the sign-in name. farcmd doesn't verify it, has no "forgot password" link, and sends no notifications. The operator resets passwords with `farcmd-admin user password`, and people find level 4/5 approval requests through their MCP client or the link it shows them.
 - `user delete` removes the user and all of their farcmd data, but not their audit entries. It refuses while the user still has capabilities or verifiers installed on remote hosts (remove those in the web UI first) unless `--force` is given.
 
 **MCP kill switches.** MCP works for a user only while all three switches allow it. The web UI, OAuth grants and tokens stay as they are, so turning MCP back on works immediately.
