@@ -200,6 +200,28 @@ test('connector creates L4 confirmation without executing SSH',async()=>{
   } finally { cleanup(f); }
 });
 
+test('L4 calls without a confirmation token continue the open request and deliver the approved result once',async()=>{
+  const f=fixture();
+  try{
+    const {targetId}=seedTarget(f); const commands=new SqliteCommandStore(f.db); const commandId=randomUUID(); const now=Date.now();
+    commands.create({id:commandId,userId:f.userId,targetId,name:'High impact',description:'test',type:'shell',content:'echo hi',level:4,enabled:true,createdAt:now,updatedAt:now});
+    new SqliteOAuthGrantStore(f.db).upsert(f.userId,'client','Client',[4],false); new SqliteOAuthGrantStore(f.db).upsert(f.userId,'other','Other',[4],false);
+    const connector=new FarcmdConnectorImpl(f.db,'http://localhost:5999'); const ctx={userId:f.userId,clientId:'client',accessToken:'t'};
+    const first=await connector.executeCommand(ctx,commandId,4); assert.ok('pending' in first);
+    const again=await connector.executeCommand(ctx,commandId,4); assert.ok('pending' in again);
+    assert.equal(again.confirmationToken,first.confirmationToken,'no second approval request while one is open');
+    const otherClient=await connector.executeCommand({...ctx,clientId:'other'},commandId,4); assert.ok('pending' in otherClient);
+    assert.notEqual(otherClient.confirmationToken,first.confirmationToken,'requests are per client');
+    // The person approves and the command runs (stand-in for approvePending, which needs a real SSH target).
+    new SqliteExecutionStore(f.db).complete(first.confirmationToken,{exitCode:0,stdout:'done',stderr:'',durationMs:5});
+    const delivered=await connector.executeCommand(ctx,commandId,4);
+    assert.ok(!('pending' in delivered)); assert.equal(delivered.stdout,'done');
+    const next=await connector.executeCommand(ctx,commandId,4); assert.ok('pending' in next);
+    assert.notEqual(next.confirmationToken,first.confirmationToken,'a delivered result is not returned twice; the next call asks again');
+    await assert.rejects(()=>connector.executeCommand(ctx,commandId,4,first.confirmationToken),/not found or expired/);
+  } finally { cleanup(f); }
+});
+
 
 test('integrity baselines hash command content, remote script and authorized key line',()=>{
   const content='echo hi';

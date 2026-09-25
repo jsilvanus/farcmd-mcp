@@ -97,8 +97,8 @@ export function createMcpServer(options:McpServerOptions):McpServer{
     const title='Run level '+level+' command ('+COMMAND_LEVELS[level].toLowerCase()+')';
     server.registerTool('command_level_'+level,security({
       title,annotations:{title,...LEVEL_ANNOTATIONS[level]},
-      description:'Execute one predefined SSH command. OAuth controls whether the command level is exposed; levels 4 and 5 require separate human confirmation in the farcmd web UI. Clients that support URL elicitation show the approval link and receive the result in this same call; otherwise the result contains approvalUrl and confirmationToken: after the person has approved, call again with the same commandId and the confirmationToken. Input is only a command ID; the server keeps the exact shell command private.',
-      inputSchema:{commandId:z.string().uuid().describe('ID of the predefined command capability'),confirmationToken:z.string().optional().describe('Return the result of a previously human-confirmed level 4 or 5 execution')},
+      description:'Execute one predefined SSH command. OAuth controls whether the command level is exposed; levels 4 and 5 require separate human confirmation in the farcmd web UI. Clients that support URL elicitation show the approval link and receive the result in this same call; otherwise the result contains approvalUrl: after the person has approved, call again with the same commandId (optionally with the confirmationToken) to get the result. Input is only a command ID; the server keeps the exact shell command private.',
+      inputSchema:{commandId:z.string().uuid().describe('ID of the predefined command capability'),confirmationToken:z.string().optional().describe('Optional. Identifies a level 4 or 5 approval request (not a credential). Without it, a call continues the latest open request for this command.')},
     }),async(args,extra)=>{
       try{
         const context=contextFromExtra(extra);

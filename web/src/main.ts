@@ -400,20 +400,26 @@ function runCommand(c:any){
     (c.level===5?'<label>Execution password<input name="password" type="password" required autocomplete="current-password"></label>':''),'Run',async form=>{
       const r=await run(c.level===5?{password:new FormData(form).get('password')}:{confirmed:true}); setTimeout(()=>resultDialog(c,r));});
 }
+/** Leaves the approval page: closes the tab when the browser allows it (it was opened from a link), otherwise shows Commands. */
+function closeApproval(){
+  window.close();
+  setTimeout(()=>{delete (window as any).__confirmToken; history.replaceState(null,'',location.pathname); render('commands');},150);
+}
+const CLOSE_APPROVAL='<button type="button" data-close-approval>Close</button>';
 async function confirmPage(token:string) {
-  let info:any; try{info=await api('/api/confirm/'+encodeURIComponent(token));}catch(err){shell('Confirm execution','<p class="warning">'+escapeHtml((err as Error).message)+'</p>');return;}
+  let info:any; try{info=await api('/api/confirm/'+encodeURIComponent(token));}catch(err){shell('Confirm execution','<article><p class="warning">'+escapeHtml((err as Error).message)+'</p><div class="form-actions">'+CLOSE_APPROVAL+'</div></article>');on('[data-close-approval]',closeApproval);return;}
   const needsPassword=info.command.confirmation==='password';
   shell('Confirm execution','<article><h2>'+escapeHtml(info.command.name)+'</h2><p>'+escapeHtml(info.command.description)+'</p><div class="pills">'+pill('Level '+info.command.level+' · '+LEVELS[info.command.level],info.command.level>=5?'bad':'warn')+pill('Requested by '+info.clientName)+'</div>'+
     '<p class="hint">'+(info.command.showOutputOnApproval?'The output is shown here when the command finishes.':'Only the exit code is shown here; the MCP client receives the full result.')+'</p>'+
-    '<form id="confirm-form">'+(needsPassword?'<label>Execution password<input name="password" type="password" autocomplete="current-password" required></label>':'')+'<button class="primary">'+(needsPassword?'Execute command':'Approve & execute')+'</button></form><p id="confirm-error" class="dialog-error"></p><div id="confirm-result"></div></article>');
-  const form=document.querySelector<HTMLFormElement>('#confirm-form')!;
+    '<form id="confirm-form">'+(needsPassword?'<label>Execution password<input name="password" type="password" autocomplete="current-password" required></label>':'')+'<div class="form-actions"><button class="primary">'+(needsPassword?'Execute command':'Approve & execute')+'</button>'+CLOSE_APPROVAL+'</div><p class="hint">Close leaves the request unanswered; it expires 5 minutes after it was made.</p></form><p id="confirm-error" class="dialog-error"></p><div id="confirm-result"></div></article>');
+  const form=document.querySelector<HTMLFormElement>('#confirm-form')!; on('[data-close-approval]',closeApproval);
   form.onsubmit=async e=>{
-    e.preventDefault(); const button=form.querySelector('button')!; button.disabled=true; button.textContent='Running…';
+    e.preventDefault(); const button=form.querySelector<HTMLButtonElement>('button.primary')!; button.disabled=true; button.textContent='Running…';
     const password=needsPassword?String(new FormData(form).get('password')??''):undefined;
     try{
       const r=await api('/api/confirm/'+encodeURIComponent(token),{method:'POST',body:JSON.stringify(password===undefined?{}:{password})});
       form.remove(); document.querySelector('#confirm-error')!.textContent='';
-      const out=document.querySelector<HTMLElement>('#confirm-result')!; out.innerHTML='<h3>Executed</h3>'+resultView(r)+'<p class="hint">The result was also sent to '+escapeHtml(info.clientName)+'.</p>'; bindCopyButtons(out);
+      const out=document.querySelector<HTMLElement>('#confirm-result')!; out.innerHTML='<h3>Executed</h3>'+resultView(r)+'<p class="hint">The result was also sent to '+escapeHtml(info.clientName)+'.</p><div class="form-actions">'+CLOSE_APPROVAL+'</div>'; bindCopyButtons(out); on('[data-close-approval]',closeApproval);
     }catch(err){document.querySelector('#confirm-error')!.textContent=(err as Error).message; button.disabled=false; button.textContent=needsPassword?'Execute command':'Approve & execute';}
   };
 }

@@ -249,7 +249,9 @@ Levels 2–5 are all marked destructive: in MCP, `destructiveHint: false` means 
 **Level 4 and 5 approvals.** Calling a level 4 or 5 tool never runs the command right away. It creates an approval request that is valid for 5 minutes:
 
 - **Clients that support URL elicitation** show the approval link to the person directly. The call stays open (with progress notifications every 15 s when the client sent a progress token) until the person approves in the browser, and then returns the result. If the person declines the link in the client, the request is cancelled.
-- **Other clients** receive `pending: true`, an `approvalUrl` and a `confirmationToken`. After the person has approved, the client calls the same tool again with the token and gets the result once.
+- **Other clients** receive `pending: true`, an `approvalUrl`, a `confirmationToken` and a `next` hint. After the person has approved, the client calls the same tool again and gets the result once. The token is optional: some clients (ChatGPT, for example) won't send back a value that looks like a credential, so a call without it continues that client's open request for the same command. It returns the approved result if the command ran in the last 15 minutes, or the same pending request if it hasn't been approved yet, instead of starting a new request. Requests are never shared between OAuth clients.
+
+The approval page has **Close** next to Approve. Close leaves the request unanswered, and it expires after 5 minutes.
 
 Behind a proxy, allow MCP requests to stay open for about 6 minutes (the nginx example uses `proxy_read_timeout 360s`).
 
