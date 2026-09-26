@@ -13,7 +13,7 @@ import { SqliteSettingsStore } from '../src/storage/settings.js';
 import { isActiveUser } from '../src/storage/interface.js';
 import { UserAdmin } from '../src/user-admin.js';
 import { AuditLog } from '../src/audit.js';
-import { mountWebApi } from '../src/web-api.js';
+import { mountWebApi, PUBLIC_API_ROUTES } from '../src/web-api.js';
 import { asWebClient } from './web-client.js';
 import { mountAuthorizationServer } from '../src/oauth/authorization-server.js';
 import { mountMcpHttp } from '../src/mcp/http.js';
@@ -55,6 +55,47 @@ test('self-service registration is off by default and controlled by the database
     assert.deepEqual(events,['auth.register:failure','admin.registration.enable:success','auth.register:success','admin.registration.disable:success','auth.register:failure']);
     assert.equal(new AuditLog(f.db).verify().ok,true);
   }finally{f.done();}
+});
+
+test('every registered /api/ route outside PUBLIC_API_ROUTES needs a signed-in active user; the public ones do not',async()=>{
+  const dir=mkdtempSync(join(tmpdir(),'farcmd-authz-'));
+  try{
+    const store=new SqliteAuthStore(join(dir,'app.sqlite')); const db=store.getDatabase(); const users=new SqliteUserStore(db);
+    const app=Fastify(); const routes:string[]=[];
+    // Collect what is actually registered, so a new route is covered without touching this test.
+    app.addHook('onRoute',r=>{if(r.url.startsWith('/api/'))for(const m of [r.method].flat())routes.push(m+' '+r.url);});
+    await app.register(formbody); await app.register(cookie); asWebClient(app); await mountWebApi(app,users,store); await app.ready();
+    const url=(pattern:string)=>pattern.replace(/:\w+/g,'x');
+    const protectedRoutes=routes.filter(r=>!PUBLIC_API_ROUTES.has(r.replace(/^HEAD /,'GET ')));
+    // Pinned: making a route public must be a deliberate change here too, not only in web-api.ts.
+    assert.deepEqual([...PUBLIC_API_ROUTES].sort(),['GET /api/auth/config','POST /api/auth/login','POST /api/auth/logout','POST /api/auth/register']);
+    assert.ok(protectedRoutes.length>40,'routes were enumerated'); for(const p of PUBLIC_API_ROUTES)assert.ok(routes.includes(p),p+' is registered');
+    const call=(route:string,headers:Record<string,string>={})=>{const [method,pattern]=route.split(' ');return app.inject({method:method as any,url:url(pattern!),headers});};
+    for(const route of protectedRoutes){
+      const r=await call(route); assert.equal(r.statusCode,401,route+' signed out');
+      if(!route.startsWith('HEAD '))assert.deepEqual(r.json(),{error:'Authentication required'},route);
+      assert.equal((await call(route,{cookie:'farcmd_session=stale'})).statusCode,401,route+' with an unknown session');
+    }
+    assert.equal((await app.inject({method:'GET',url:'/api/auth/config'})).statusCode,200);
+    assert.equal((await app.inject({method:'HEAD',url:'/api/auth/config'})).statusCode,200);
+    assert.equal((await app.inject({method:'POST',url:'/api/auth/login',payload:{email:'nobody@example.test',password:PASSWORD}})).json().error,'Invalid email or password');
+    assert.equal((await app.inject({method:'POST',url:'/api/auth/logout'})).statusCode,200);
+    assert.equal((await app.inject({method:'POST',url:'/api/auth/register',payload:{}})).statusCode,403,'reached the handler: registration is disabled');
+    // Unknown /api/ URLs are not public: 401 signed out (nothing to enumerate), 404 once signed in.
+    assert.equal((await app.inject({method:'GET',url:'/api/no-such-route'})).statusCode,401);
+    assert.equal((await app.inject({method:'DELETE',url:'/api/auth/config'})).statusCode,401,'a public path with another method is not public');
+    const user=await new UserAdmin(db).create({email:'a@example.test',name:'A',password:PASSWORD});
+    const web=await login(app,'a@example.test'); assert.equal(web.status,200);
+    assert.equal((await app.inject({method:'GET',url:'/api/no-such-route',headers:{cookie:web.cookie}})).statusCode,404);
+    assert.equal((await app.inject({method:'GET',url:'/api/auth/session',headers:{cookie:web.cookie}})).json().user.id,user.id);
+    // A disabled account: 401 with its own message, the session is deleted and the cookie cleared.
+    db.prepare('UPDATE users SET disabled_at=? WHERE id=?').run(Date.now(),user.id);
+    const refused=await app.inject({method:'GET',url:'/api/commands',headers:{cookie:web.cookie}});
+    assert.equal(refused.statusCode,401); assert.equal(refused.json().error,'This account is disabled.');
+    assert.equal(refused.cookies.find(c=>c.name==='farcmd_session')?.value,'','cookie cleared');
+    db.prepare('UPDATE users SET disabled_at=NULL WHERE id=?').run(user.id);
+    assert.equal((await app.inject({method:'GET',url:'/api/commands',headers:{cookie:web.cookie}})).statusCode,401,'that session is gone');
+  }finally{rmSync(dir,{recursive:true,force:true});}
 });
 
 test('administrator-created users: validation, password change ends sessions, nothing secret audited',async()=>{
