@@ -13,9 +13,9 @@ import { getSshPassphrase, lockSshKey, unlockSshKey } from './ssh-key-cache.js';
 import ssh2 from 'ssh2';
 const { utils }=ssh2;
 import { SqliteCommandInstallationStore, SqliteRemoteCapabilityLedgerStore, type CommandInstallationRecord, commandInstallationKeyAad } from './storage/command-installations.js';
-import { buildCommandRestrictedAuthorizedKey, buildFarcmdScript, executeAsMaster, farcmdScriptPath, installCommandCapability, removeCommandCapability, sha256Hex, type SshKeyMaterial } from './ssh.js';
+import { buildCommandRestrictedAuthorizedKey, buildFarcmdScript, generateEd25519KeyPair, executeAsMaster, farcmdScriptPath, installCommandCapability, removeCommandCapability, sha256Hex, type SshKeyMaterial } from './ssh.js';
 import { SqliteVerificationAuthorityStore, verificationKeyAad, verificationSecretAad, type VerificationAuthorityRecord } from './storage/verification-authorities.js';
-import { generateVerificationSecret, isSafeTargetUsername, rootInstallInvocation, renderSudoers, renderVerifierInstallScript, renderVerifierUninstallScript, verificationForcedCommand, verificationKeyComment, verifierPrivilegeFor } from './verification.js';
+import { generateVerificationSecret, isSafeTargetUsername, isValidSudoPassword, rootInstallInvocation, renderSudoers, renderVerifierInstallScript, renderVerifierUninstallScript, verificationForcedCommand, verificationKeyComment, verifierPrivilegeFor } from './verification.js';
 import { CapabilityVerificationService, type TargetVerificationResult } from './capability-verification.js';
 import type { SshTargetRecord } from './storage/ssh.js';
 import { SqliteCommandStore, type CommandLevel, type CommandRecord, hashCommandContent, requiresIntegrityVerification } from './command-registry.js';
@@ -163,9 +163,7 @@ export async function mountWebApi(app:FastifyInstance, users:UserStore, sessionS
   const prepareVerifier=(userId:string,target:SshTargetRecord)=>{
     const existing=verifiers.getForTarget(userId,target.id);
     const id=existing?.id??crypto.randomUUID(); const privilege=verifierPrivilegeFor(target.username);
-    const generated=utils.generateKeyPairSync('ed25519',{comment:verificationKeyComment(id)});
-    const publicKey=String(generated.public).trim(); const privateKey=String(generated.private);
-    const fingerprint=inspectPrivateKey(privateKey).fingerprint; if(!fingerprint)throw new Error('Could not fingerprint the generated verification key.');
+    const {publicKey,privateKey,fingerprint}=generateEd25519KeyPair(verificationKeyComment(id)); if(!fingerprint)throw new Error('Could not fingerprint the generated verification key.');
     const secret=generateVerificationSecret();
     const authorizedKeyLine=buildCommandRestrictedAuthorizedKey(publicKey,verificationForcedCommand(id,privilege));
     const script=renderVerifierInstallScript({id,username:target.username,privilege,secret,authorizedKeyLine});
@@ -178,7 +176,7 @@ export async function mountWebApi(app:FastifyInstance, users:UserStore, sessionS
   const sudoPasswordFrom=(request:FastifyRequest):string|undefined|null=>{
     const b=(request.body??{}) as Record<string,unknown>; const v=b.sudoPassword;
     if(v===undefined||v===null||v==='')return undefined;
-    return typeof v==='string'&&v.length<=1024&&!/[\r\n\0]/.test(v)?v:null;
+    return typeof v==='string'&&isValidSudoPassword(v)?v:null;
   };
   /**
    * SSH access used to obtain root for automatic verifier install/removal. It may be a different account on
@@ -186,14 +184,14 @@ export async function mountWebApi(app:FastifyInstance, users:UserStore, sessionS
    * user's stored master keys; the host key is the target's pinned fingerprint. Defaults to the target's
    * own account and master key. The verifier is always installed for, and measures, target.username.
    */
-  const installAccess=(request:FastifyRequest,userId:string,target:SshTargetRecord):{config:ReturnType<typeof targetConfig>;key:SshKeyMaterial;root:{command:string;stdinPrefix:string}}|{error:string;status:number}=>{
+  const installAccess=(request:FastifyRequest,userId:string,target:SshTargetRecord):{config:ReturnType<typeof targetConfig>;key:SshKeyMaterial;root:{command:string;stdinPrefix:string}}|{error:string;status:number;kind:'input'|'target'|'master'}=>{
     const b=(request.body??{}) as Record<string,unknown>;
     const username=typeof b.installUsername==='string'&&b.installUsername.trim()?b.installUsername.trim():target.username;
-    if(!isSafeTargetUsername(username))return {error:'Invalid install account name.',status:400};
+    if(!isSafeTargetUsername(username))return {error:'Invalid install account name.',status:400,kind:'input'};
     const keyId=typeof b.installKeyId==='string'&&b.installKeyId?b.installKeyId:target.sshKeyId;
-    const sudoPassword=sudoPasswordFrom(request); if(sudoPassword===null)return {error:'Invalid sudo password.',status:400};
-    if(!target.enabled||!target.hostFingerprint)return {error:'SSH target must be enabled and have a pinned host fingerprint.',status:400};
-    const master=unlockedMaster(userId,keyId); if('error' in master)return master;
+    const sudoPassword=sudoPasswordFrom(request); if(sudoPassword===null)return {error:'Invalid sudo password.',status:400,kind:'input'};
+    if(!target.enabled||!target.hostFingerprint)return {error:'SSH target must be enabled and have a pinned host fingerprint.',status:400,kind:'target'};
+    const master=unlockedMaster(userId,keyId); if('error' in master)return {...master,kind:'master'};
     return {config:{...targetConfig(target),username},key:master.key,root:rootInstallInvocation(verifierPrivilegeFor(username),sudoPassword)};
   };
   const verifierTarget=async(request:FastifyRequest,reply:FastifyReply)=>{
@@ -201,39 +199,44 @@ export async function mountWebApi(app:FastifyInstance, users:UserStore, sessionS
     const target=ssh.getTarget(user.id,(request.params as {id:string}).id); if(!target){reply.code(404).send({error:'SSH target not found'});return undefined;}
     return {user,target};
   };
-  app.get('/api/ssh/targets/:id/verifier',async(request,reply)=>{const ctx=await verifierTarget(request,reply);if(!ctx)return;return {verifier:verifierStatus(verifiers.getForTarget(ctx.user.id,ctx.target.id))};});
+  /** verifierTarget for installing: the target account name is embedded in sudoers and the verifier. */
+  const verifierInstallTarget=async(request:FastifyRequest,reply:FastifyReply)=>{
+    const ctx=await verifierTarget(request,reply); if(!ctx)return undefined;
+    if(!isSafeTargetUsername(ctx.target.username)){reply.code(400).send({error:'The target account name is not supported by the verifier.'});return undefined;}
+    return ctx;
+  };
+  const currentVerifier=(userId:string,targetId:string)=>verifierStatus(verifiers.getForTarget(userId,targetId));
+  app.get('/api/ssh/targets/:id/verifier',async(request,reply)=>{const ctx=await verifierTarget(request,reply);if(!ctx)return;return {verifier:currentVerifier(ctx.user.id,ctx.target.id)};});
   // Automatic install/repair: needs a master key and root on the target through the chosen SSH account (root, sudo password or passwordless sudo).
   app.post('/api/ssh/targets/:id/verifier',async(request,reply)=>{
-    const ctx=await verifierTarget(request,reply);if(!ctx)return; const {user,target}=ctx;
-    if(!isSafeTargetUsername(target.username))return reply.code(400).send({error:'The target account name is not supported by the verifier.'});
-    const access=installAccess(request,user.id,target); if('error' in access)return reply.code(access.status).send({error:access.error+(access.status===400&&/master key/.test(access.error)?' Use the manual root install script instead.':'')});
+    const ctx=await verifierInstallTarget(request,reply);if(!ctx)return; const {user,target}=ctx;
+    const access=installAccess(request,user.id,target); if('error' in access)return reply.code(access.status).send({error:access.error+(access.kind==='master'&&access.status===400?' Use the manual root install script instead.':'')});
     const {record,script}=prepareVerifier(user.id,target);
     try{await executeAsMaster(access.config,access.key,access.root.command,access.root.stdinPrefix+script);}
     catch(error){return reply.code(502).send({error:'Verifier installation failed: '+(error instanceof Error?error.message:String(error))+' (automatic installation needs root on the target through the chosen SSH account: the root account, that account\'s sudo password, or passwordless sudo; otherwise use the manual root install script).'});}
     verifiers.upsert({...record,installedAt:Date.now()});
     const result=await verification.verifyTarget(user.id,target);
-    return reply.code(201).send({verifier:verifierStatus(verifiers.getForTarget(user.id,target.id)),verification:verificationSummary(user.id,result)});
+    return reply.code(201).send({verifier:currentVerifier(user.id,target.id),verification:verificationSummary(user.id,result)});
   });
   // Manual install/repair: works without any master key. The script contains the verification secret and is shown once.
   app.post('/api/ssh/targets/:id/verifier/manual',async(request,reply)=>{
-    const ctx=await verifierTarget(request,reply);if(!ctx)return; const {user,target}=ctx;
-    if(!isSafeTargetUsername(target.username))return reply.code(400).send({error:'The target account name is not supported by the verifier.'});
+    const ctx=await verifierInstallTarget(request,reply);if(!ctx)return; const {user,target}=ctx;
     const {record,script}=prepareVerifier(user.id,target);
     verifiers.upsert(record);
-    return reply.code(201).send({verifier:verifierStatus(verifiers.getForTarget(user.id,target.id)),installScript:script});
+    return reply.code(201).send({verifier:currentVerifier(user.id,target.id),installScript:script});
   });
   app.post('/api/ssh/targets/:id/verifier/verify',async(request,reply)=>{
     const ctx=await verifierTarget(request,reply);if(!ctx)return; const {user,target}=ctx;
     if(!target.enabled||!target.hostFingerprint)return reply.code(400).send({error:'SSH target must be enabled and have a pinned host fingerprint.'});
     const result=await verification.verifyTarget(user.id,target);
-    return {verifier:verifierStatus(verifiers.getForTarget(user.id,target.id)),verification:verificationSummary(user.id,result)};
+    return {verifier:currentVerifier(user.id,target.id),verification:verificationSummary(user.id,result)};
   });
   app.delete('/api/ssh/targets/:id/verifier',async(request,reply)=>{
     const ctx=await verifierTarget(request,reply);if(!ctx)return; const {user,target}=ctx;
     const v=verifiers.getForTarget(user.id,target.id); if(!v)return reply.code(404).send({error:'No verification authority for this target.'});
     const uninstallScript=renderVerifierUninstallScript(v.id,v.username);
     const master=installAccess(request,user.id,target);
-    if('error' in master&&/^Invalid/.test(master.error))return reply.code(400).send({error:master.error});
+    if('error' in master&&master.kind==='input')return reply.code(400).send({error:master.error});
     let removed=false; let errorMessage:string|undefined;
     if('key' in master){try{await executeAsMaster(master.config,master.key,master.root.command,master.root.stdinPrefix+uninstallScript);removed=true;}catch(error){errorMessage=error instanceof Error?error.message:'Remote removal failed.';}}
     else errorMessage=master.error;
@@ -284,7 +287,7 @@ export async function mountWebApi(app:FastifyInstance, users:UserStore, sessionS
     const base={...current,name:typeof b.name==='string'?b.name.trim():current.name,hostname:typeof b.hostname==='string'?b.hostname.trim():current.hostname,username:typeof b.username==='string'?b.username.trim():current.username,port:b.port===undefined?current.port:Number(b.port),sshKeyId:typeof b.sshKeyId==='string'?b.sshKeyId:current.sshKeyId,enabled:typeof b.enabled==='boolean'?b.enabled:current.enabled,updatedAt:Date.now()}; const next = b.hostFingerprint===null ? base : {...base,...(typeof b.hostFingerprint==='string'?{hostFingerprint:b.hostFingerprint.trim()}:current.hostFingerprint?{hostFingerprint:current.hostFingerprint}:{})};
     if(!next.name||!next.hostname||!next.username||!Number.isInteger(next.port)||next.port<1||next.port>65535||!ssh.getKey(user.id,next.sshKeyId)) return reply.code(400).send({error:'Invalid SSH target data'}); ssh.updateTarget(next); return {target:ssh.getTarget(user.id,id)};
   });
-  app.delete('/api/ssh/targets/:id',async (request,reply)=>{ const user=await requireUser(request,reply,users,sessions); if(!user)return; const id=(request.params as {id:string}).id; if(!ssh.getTarget(user.id,id))return reply.code(404).send({error:'SSH target not found'}); if(installations.list(user.id).some(k=>k.targetId===id))return reply.code(409).send({error:'This target has installed command capabilities. Remove those capabilities before deleting the target.'});if(verifiers.getForTarget(user.id,id))return reply.code(409).send({error:'This target has a verification authority. Remove it before deleting the target.'}); ssh.deleteTarget(user.id,id); return {ok:true}; });
+  app.delete('/api/ssh/targets/:id',async (request,reply)=>{ const user=await requireUser(request,reply,users,sessions); if(!user)return; const id=(request.params as {id:string}).id; if(!ssh.getTarget(user.id,id))return reply.code(404).send({error:'SSH target not found'}); if(installations.listForTarget(user.id,id).length)return reply.code(409).send({error:'This target has installed command capabilities. Remove those capabilities before deleting the target.'});if(verifiers.getForTarget(user.id,id))return reply.code(409).send({error:'This target has a verification authority. Remove it before deleting the target.'}); ssh.deleteTarget(user.id,id); return {ok:true}; });
   app.post('/api/ssh/targets/:id/test',async (request,reply)=>{
     const user=await requireUser(request,reply,users,sessions); if(!user)return; const id=(request.params as {id:string}).id; const target=ssh.getTarget(user.id,id); if(!target)return reply.code(404).send({error:'SSH target not found'}); const key=ssh.getKey(user.id,target.sshKeyId); if(!key)return reply.code(400).send({error:'SSH key not found'});
     const passphrase=getSshPassphrase(user.id,key.id); let privateKey:string; try { privateKey=decryptSecret(key.encryptedPrivateKey,sshKeyAad(user.id,key.id)); } catch { return reply.code(500).send({error:'Unable to decrypt SSH key'}); }
@@ -297,7 +300,7 @@ export async function mountWebApi(app:FastifyInstance, users:UserStore, sessionS
   app.patch('/api/commands/:id',async(request,reply)=>{const user=await requireUser(request,reply,users,sessions);if(!user)return;const id=(request.params as {id:string}).id;const cur=commands.get(user.id,id);if(!cur)return reply.code(404).send({error:'Command not found'});const b=request.body as Record<string,unknown>;const nextType=b.type===undefined?cur.type:(b.type==='bash_script'?'bash_script':b.type);const nextContent=typeof b.content==='string'?b.content:(typeof b.shellCommand==='string'?b.shellCommand:cur.content);const next={...cur,name:typeof b.name==='string'?b.name.trim():cur.name,description:typeof b.description==='string'?b.description.trim():cur.description,type:nextType as 'shell'|'bash_script',content:nextType==='shell'?nextContent.trim():nextContent,targetId:typeof b.targetId==='string'?b.targetId:cur.targetId,level:b.level===undefined?cur.level:(typeof b.level==='number'?b.level:Number(b.level)),enabled:typeof b.enabled==='boolean'?b.enabled:cur.enabled,showOutputOnApproval:typeof b.showOutputOnApproval==='boolean'?b.showOutputOnApproval:!!cur.showOutputOnApproval,verifyIntegrity:typeof b.verifyIntegrity==='boolean'?b.verifyIntegrity:!!cur.verifyIntegrity,updatedAt:Date.now()};if(!next.name||next.name.length>120||next.description.length>2000||!next.content||next.content.length>100000||!isCommandLevel(next.level)||!ssh.getTarget(user.id,next.targetId)||(next.type==='shell'&&/\r|\n/.test(next.content)))return reply.code(400).send({error:'Invalid command data'});const installation=installations.get(user.id,id);const capabilityChanged=!!installation&&(next.content!==cur.content||next.type!==cur.type||next.targetId!==cur.targetId);if(capabilityChanged)return reply.code(409).send({error:'This command has an installed SSH capability. Remove or replace that capability before changing its executable content or target.'});const clearReasons=cur.level===5&&commands.hasExecutionPassword(user.id,id)?[...(next.level!==5?['level_changed']:[]),...(next.content!==cur.content?['content_changed']:[]),...(next.targetId!==cur.targetId?['target_changed']:[])]:[];if(clearReasons.length)commands.clearExecutionPassword(user.id,id);commands.update(next as CommandRecord);if(clearReasons.length)audit.record({event:'command.level5_password_cleared',actor:'web',outcome:'success',userId:user.id,ip:request.ip,targetType:'command',targetId:id,details:{reasons:clearReasons}});/* an automatic clear gets its own audit entry, not only the command.update */return {command:commands.get(user.id,id)};});
   app.delete('/api/commands/:id',async(request,reply)=>{const user=await requireUser(request,reply,users,sessions);if(!user)return;const id=(request.params as {id:string}).id;const command=commands.get(user.id,id);if(!command)return reply.code(404).send({error:'Command not found'});const installation=installations.get(user.id,id);if(installation){const {removed}=await uninstallCapability(user.id,installation);/* the first delete only uninstalls; the command stays until deleted again */return {ok:true,commandDeleted:false,remoteCleanupPending:!removed};}commands.delete(user.id,id);return {ok:true,commandDeleted:true,remoteCleanupPending:false};});
   app.get('/api/commands/:id/key',async(request,reply)=>{const user=await requireUser(request,reply,users,sessions);if(!user)return;const id=(request.params as {id:string}).id;const command=commands.get(user.id,id);if(!command)return reply.code(404).send({error:'Command not found'});const key=installations.get(user.id,id);return {key:key?{id:key.id,fingerprint:key.fingerprint,masterKeyId:key.masterKeyId,installedAt:key.installedAt,remoteScriptPath:key.remoteScriptPath}:undefined};});
-  app.post('/api/commands/:id/key',async(request,reply)=>{const user=await requireUser(request,reply,users,sessions);if(!user)return;const id=(request.params as {id:string}).id;const command=commands.get(user.id,id);if(!command)return reply.code(404).send({error:'Command not found'});const existing=installations.get(user.id,id);if(existing)return reply.code(409).send({error:'This command already has an installed SSH capability.'});const target=ssh.getTarget(user.id,command.targetId);if(!target||!target.enabled)return reply.code(400).send({error:'SSH target is unavailable.'});if(!target.hostFingerprint)return reply.code(400).send({error:'Pin the SSH host fingerprint before creating a command capability.'});const master=unlockedMaster(user.id,target.sshKeyId);if('error' in master)return reply.code(master.status).send({error:master.error});const generated=utils.generateKeyPairSync('ed25519',{comment:'farcmd:'+command.id});const publicKey=String(generated.public).trim();const privateKey=String(generated.private);const fingerprint=inspectPrivateKey(privateKey).fingerprint;if(!fingerprint)return reply.code(500).send({error:'Could not fingerprint generated command key.'});const scriptPath=farcmdScriptPath(publicUrl,command.id);const script=buildFarcmdScript(publicUrl,command.id,command.type,command.content);const authorizedKey=buildCommandRestrictedAuthorizedKey(publicKey,scriptPath);try{await installCommandCapability(targetConfig(target),master.key,authorizedKey,scriptPath,script);}catch(error){return reply.code(502).send({error:error instanceof Error?error.message:'Failed to install command capability on target'});}const keyId=crypto.randomUUID();const now=Date.now();installations.create({id:keyId,userId:user.id,commandId:id,targetId:target.id,masterKeyId:target.sshKeyId,encryptedPrivateKey:encryptSecret(privateKey,commandInstallationKeyAad(user.id,keyId)),publicKey,fingerprint,remoteScriptPath:scriptPath,authorizedKeyLine:authorizedKey,scriptContent:script,commandSha256:hashCommandContent(command.type,command.content),scriptSha256:sha256Hex(script),authorizedKeySha256:sha256Hex(authorizedKey),installedAt:now,createdAt:now,updatedAt:now});return reply.code(201).send({key:{id:keyId,fingerprint,installedAt:now,remoteScriptPath:scriptPath}});});
+  app.post('/api/commands/:id/key',async(request,reply)=>{const user=await requireUser(request,reply,users,sessions);if(!user)return;const id=(request.params as {id:string}).id;const command=commands.get(user.id,id);if(!command)return reply.code(404).send({error:'Command not found'});const existing=installations.get(user.id,id);if(existing)return reply.code(409).send({error:'This command already has an installed SSH capability.'});const target=ssh.getTarget(user.id,command.targetId);if(!target||!target.enabled)return reply.code(400).send({error:'SSH target is unavailable.'});if(!target.hostFingerprint)return reply.code(400).send({error:'Pin the SSH host fingerprint before creating a command capability.'});const master=unlockedMaster(user.id,target.sshKeyId);if('error' in master)return reply.code(master.status).send({error:master.error});const {publicKey,privateKey,fingerprint}=generateEd25519KeyPair('farcmd:'+command.id);if(!fingerprint)return reply.code(500).send({error:'Could not fingerprint generated command key.'});const scriptPath=farcmdScriptPath(publicUrl,command.id);const script=buildFarcmdScript(publicUrl,command.id,command.type,command.content);const authorizedKey=buildCommandRestrictedAuthorizedKey(publicKey,scriptPath);try{await installCommandCapability(targetConfig(target),master.key,authorizedKey,scriptPath,script);}catch(error){return reply.code(502).send({error:error instanceof Error?error.message:'Failed to install command capability on target'});}const keyId=crypto.randomUUID();const now=Date.now();installations.create({id:keyId,userId:user.id,commandId:id,targetId:target.id,masterKeyId:target.sshKeyId,encryptedPrivateKey:encryptSecret(privateKey,commandInstallationKeyAad(user.id,keyId)),publicKey,fingerprint,remoteScriptPath:scriptPath,authorizedKeyLine:authorizedKey,scriptContent:script,commandSha256:hashCommandContent(command.type,command.content),scriptSha256:sha256Hex(script),authorizedKeySha256:sha256Hex(authorizedKey),installedAt:now,createdAt:now,updatedAt:now});return reply.code(201).send({key:{id:keyId,fingerprint,installedAt:now,remoteScriptPath:scriptPath}});});
   app.delete('/api/commands/:id/key',async(request,reply)=>{const user=await requireUser(request,reply,users,sessions);if(!user)return;const id=(request.params as {id:string}).id;const command=commands.get(user.id,id);if(!command)return reply.code(404).send({error:'Command not found'});const installation=installations.get(user.id,id);if(!installation)return reply.code(404).send({error:'Installed SSH capability not found'});const {removed,error}=await uninstallCapability(user.id,installation);return {ok:true,removed,remoteCleanupPending:!removed,error};});
   app.post('/api/commands/:id/execution-password',async(request,reply)=>{const user=await requireUser(request,reply,users,sessions);if(!user)return;const id=(request.params as {id:string}).id;const command=commands.get(user.id,id);if(!command)return reply.code(404).send({error:'Command not found'});if(command.level!==5)return reply.code(400).send({error:'Only level 5 commands have execution passwords'});const b=request.body as Record<string,unknown>;const password=typeof b.password==='string'?b.password:'';if(!passwordLengthOk(password))return reply.code(400).send({error:'Execution password must be 12-1024 characters'});commands.setExecutionPassword(user.id,id,await hashPassword(password));return {ok:true};});
   app.get('/api/history/command-counts',async(request,reply)=>{const user=await requireUser(request,reply,users,sessions);if(!user)return;return {counts:executionHistory.successfulCounts(user.id)};});

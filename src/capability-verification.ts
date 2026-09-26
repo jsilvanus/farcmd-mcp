@@ -30,12 +30,8 @@ export class CapabilityVerificationService {
   }
 
   expectations(authority:VerificationAuthorityRecord,target:SshTargetRecord):VerificationExpectations{
-    const capabilities:ExpectedCapability[]=[];
-    for(const i of this.installations.list(authority.userId).filter(i=>i.targetId===target.id)){
-      const scriptName=farcmdScriptName(i.remoteScriptPath);
-      // Rows without a complete baseline cannot be verified; they are reported as problems for that command.
-      capabilities.push({commandId:i.commandId,scriptName:scriptName??'',scriptSha256:i.scriptSha256??'',authorizedKeySha256:i.authorizedKeySha256??'',blobSha256:sha256Hex(publicKeyBlob(i.publicKey))});
-    }
+    // Rows without a complete baseline cannot be verified; they are reported as problems for that command.
+    const capabilities:ExpectedCapability[]=this.installations.listForTarget(authority.userId,target.id).map(i=>({commandId:i.commandId,scriptName:farcmdScriptName(i.remoteScriptPath)??'',scriptSha256:i.scriptSha256??'',authorizedKeySha256:i.authorizedKeySha256??'',blobSha256:sha256Hex(publicKeyBlob(i.publicKey))}));
     const staleScriptNames=this.ledger.pendingForTarget(authority.userId,target.id).map(e=>farcmdScriptName(e.remoteScriptPath)).filter((n):n is string=>!!n);
     return {
       verifierId:authority.id,username:authority.username,privilege:authority.privilege,template:renderVerifierTemplate(authority.id,authority.username,authority.privilege),
@@ -87,11 +83,6 @@ export class CapabilityVerificationService {
     }
   }
 
-  /**
-   * Execution gate for L3–L5 and for L1–L2 commands that opt in. Resolves only if an active verification authority returned a fresh,
-   * authenticated measurement in which the verifier, the account-level state and this command's
-   * capability all match farcmd's records. Any other outcome throws: there is no unverified fallback.
-   */
   /** Cheap local pre-check so that nothing is sent to the target when verification cannot possibly succeed. */
   assertAvailable(userId:string,target:SshTargetRecord):VerificationAuthorityRecord{
     const authority=this.authorities.getForTarget(userId,target.id);
@@ -99,6 +90,11 @@ export class CapabilityVerificationService {
     if(authority.status!=='active')throw new IntegrityVerificationUnavailable('The verification authority for this target has not been activated; run "Verify now" in the farcmd web UI.');
     return authority;
   }
+  /**
+   * Execution gate for L3–L5 and for L1–L2 commands that opt in. Resolves only if an active verification authority returned a fresh,
+   * authenticated measurement in which the verifier, the account-level state and this command's
+   * capability all match farcmd's records. Any other outcome throws: there is no unverified fallback.
+   */
   async assertCommandIntact(userId:string,target:SshTargetRecord,commandId:string):Promise<void>{
     const authority=this.assertAvailable(userId,target);
     let evaluation:VerificationEvaluation;

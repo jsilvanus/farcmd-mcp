@@ -1,5 +1,5 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
-import { sha256Hex } from './ssh.js';
+import { b64, sha256Hex } from './ssh.js';
 import { VERIFIER_PROGRAM_TEMPLATE } from './verifier-program.js';
 
 /**
@@ -32,6 +32,9 @@ export class VerificationError extends Error { constructor(message:string){super
 export function assertVerifierId(id:string):void{ if(!UUID.test(id))throw new Error('Invalid verifier ID.'); }
 /** Conservative POSIX account name check: the name is embedded in sudoers and in the root-owned verifier. */
 export function isSafeTargetUsername(username:string):boolean{ return /^[a-z_][a-z0-9_-]{0,31}$/.test(username); }
+function assertSafeTargetUsername(username:string):void{ if(!isSafeTargetUsername(username))throw new Error('Unsupported target username for the verifier.'); }
+/** A sudo password farcmd can pass on stdin: one line, at most 1024 characters. */
+export function isValidSudoPassword(password:string):boolean{ return password.length<=1024&&!/[\r\n\0]/.test(password); }
 export function verifierPrivilegeFor(username:string):VerifierPrivilege{ return username==='root'?'root':'sudo'; }
 /** sudoers applies the LAST matching rule and reads /etc/sudoers.d in lexical order, so the argument-free
  * NOPASSWD rule is named to sort after typical rules (e.g. a password-requiring "user ALL=(ALL) ALL"). */
@@ -47,7 +50,7 @@ export function verificationForcedCommand(id:string,privilege:VerifierPrivilege)
 }
 export function renderVerifierTemplate(id:string,username:string,privilege:VerifierPrivilege):string{
   assertVerifierId(id);
-  if(!isSafeTargetUsername(username))throw new Error('Unsupported target username for the verifier.');
+  assertSafeTargetUsername(username);
   return VERIFIER_PROGRAM_TEMPLATE.replaceAll('@@ID@@',id).replaceAll('@@USER@@',username).replaceAll('@@SUDOERS@@',privilege==='sudo'?verifierPaths(id).sudoers:'');
 }
 export function isAllowedPythonPath(path:string):boolean{ return ALLOWED_PYTHON.test(path); }
@@ -59,14 +62,13 @@ export function renderVerifierProgram(template:string,pythonPath:string):string{
 }
 export function renderSudoers(id:string,username:string):string{
   const {program}=verifierPaths(id);
-  if(!isSafeTargetUsername(username))throw new Error('Unsupported target username for the verifier.');
+  assertSafeTargetUsername(username);
   // The empty-string argument list ("") means sudo refuses the rule if any argument is supplied.
   return ['# farcmd verification authority '+id+' (managed by farcmd; do not edit)','Defaults!'+program+' !requiretty',username+' ALL=(root) NOPASSWD: '+program+' ""',''].join('\n');
 }
 export function generateVerificationSecret():Buffer{ return randomBytes(32); }
 
 function shq(value:string):string{ return "'"+value.replaceAll("'","'\\''")+"'"; }
-function b64(value:string):string{ return Buffer.from(value,'utf8').toString('base64'); }
 
 /** Shell run as the target account (never as root) to (re)place this verifier's authorized_keys line. */
 function userAuthorizedKeysScript(id:string,username:string,authorizedKeyLine:string|undefined):string{
@@ -82,7 +84,8 @@ function userAuthorizedKeysScript(id:string,username:string,authorizedKeyLine:st
 }
 function asTargetUser(username:string,script:string):string{
   // Root never writes into the account's home directly: that would follow symlinks planted by the account.
-  return ['if command -v runuser >/dev/null 2>&1; then','  printf %s '+shq(b64(script))+' | base64 -d | runuser -u '+shq(username)+' -- /bin/sh -s','else','  printf %s '+shq(b64(script))+' | base64 -d | su -s /bin/sh '+shq(username)+' -c "/bin/sh -s"','fi'].join('\n');
+  const decoded='printf %s '+shq(b64(script))+' | base64 -d | ';
+  return ['if command -v runuser >/dev/null 2>&1; then','  '+decoded+'runuser -u '+shq(username)+' -- /bin/sh -s','else','  '+decoded+'su -s /bin/sh '+shq(username)+' -c "/bin/sh -s"','fi'].join('\n');
 }
 
 /**
@@ -96,14 +99,14 @@ function asTargetUser(username:string,script:string):string{
 export function rootInstallInvocation(privilege:VerifierPrivilege,sudoPassword?:string):{command:string;stdinPrefix:string}{
   if(privilege==='root')return {command:'sh -s',stdinPrefix:''};
   if(sudoPassword===undefined||sudoPassword==='')return {command:'sudo -n sh -s',stdinPrefix:''};
-  if(/[\r\n\0]/.test(sudoPassword)||sudoPassword.length>1024)throw new Error('Invalid sudo password.');
+  if(!isValidSudoPassword(sudoPassword))throw new Error('Invalid sudo password.');
   return {
     command:"IFS= read -r farcmd_pw || exit 1; printf '%s\\n' \"$farcmd_pw\" | command sudo -S -p '' -v 2>/dev/null || { echo 'farcmd: sudo rejected the password (or the account may not use sudo)' >&2; exit 1; }; unset farcmd_pw; command sudo -n sh -s; rc=$?; command sudo -k; exit $rc",
     stdinPrefix:sudoPassword+'\n',
   };
 }
 
-export interface VerifierInstallParams { id:string; username:string; privilege:VerifierPrivilege; secret:Buffer; authorizedKeyLine:string; }
+interface VerifierInstallParams { id:string; username:string; privilege:VerifierPrivilege; secret:Buffer; authorizedKeyLine:string; }
 /**
  * POSIX sh installer that must run as root on the target (farcmd pipes it into sudo via the master key,
  * see rootInstallInvocation, or an administrator runs it manually). It contains the verification secret: it is only
@@ -151,7 +154,7 @@ export function renderVerifierInstallScript(p:VerifierInstallParams):string{
 }
 export function renderVerifierUninstallScript(id:string,username:string):string{
   const paths=verifierPaths(id);
-  if(!isSafeTargetUsername(username))throw new Error('Unsupported target username for the verifier.');
+  assertSafeTargetUsername(username);
   return ['#!/bin/sh','# farcmd verification authority removal ('+id+'). Run as root on the target.','set -eu','[ "$(id -u)" -eq 0 ] || { echo "farcmd: must run as root" >&2; exit 1; }',
     'rm -f -- '+paths.sudoers+' '+paths.program+' '+paths.secret,
     'if getent passwd '+shq(username)+' >/dev/null; then',asTargetUser(username,userAuthorizedKeysScript(id,username,undefined)),'fi',''].join('\n');

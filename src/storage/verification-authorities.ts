@@ -25,9 +25,6 @@ export class SqliteVerificationAuthorityStore {
   getForTarget(userId:string,targetId:string):VerificationAuthorityRecord|undefined{
     return this.map(this.db.prepare('SELECT * FROM verification_authorities WHERE user_id=? AND target_id=?').get(userId,targetId) as any);
   }
-  list(userId:string):VerificationAuthorityRecord[]{
-    return (this.db.prepare('SELECT * FROM verification_authorities WHERE user_id=? ORDER BY created_at').all(userId) as any[]).map(this.map).filter((r):r is VerificationAuthorityRecord=>r!==undefined);
-  }
   /** Insert or fully replace (repair/rotation) the authority for a target. */
   upsert(r:VerificationAuthorityRecord):void{
     this.db.prepare('INSERT INTO verification_authorities (id,user_id,target_id,username,privilege,encrypted_private_key,public_key,fingerprint,encrypted_secret,authorized_key_line,authorized_key_sha256,sudoers_sha256,python_path,verifier_sha256,status,installed_at,last_verified_at,last_error,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(user_id,target_id) DO UPDATE SET id=excluded.id,username=excluded.username,privilege=excluded.privilege,encrypted_private_key=excluded.encrypted_private_key,public_key=excluded.public_key,fingerprint=excluded.fingerprint,encrypted_secret=excluded.encrypted_secret,authorized_key_line=excluded.authorized_key_line,authorized_key_sha256=excluded.authorized_key_sha256,sudoers_sha256=excluded.sudoers_sha256,python_path=excluded.python_path,verifier_sha256=excluded.verifier_sha256,status=excluded.status,installed_at=excluded.installed_at,last_verified_at=excluded.last_verified_at,last_error=excluded.last_error,updated_at=excluded.updated_at')

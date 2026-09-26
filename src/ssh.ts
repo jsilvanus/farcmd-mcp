@@ -31,6 +31,13 @@ function fingerprintOf(key:ParsedKey|undefined):string|undefined {
   return 'sha256:'+createHash('sha256').update(raw).digest('base64url');
 }
 
+/** A fresh ed25519 key pair for a forced-command key; fingerprint is undefined only if it cannot be computed. */
+export function generateEd25519KeyPair(comment:string):{publicKey:string;privateKey:string;fingerprint:string|undefined}{
+  const generated=utils.generateKeyPairSync('ed25519',{comment});
+  const privateKey=String(generated.private);
+  return {publicKey:String(generated.public).trim(),privateKey,fingerprint:inspectPrivateKey(privateKey).fingerprint};
+}
+
 export function inspectPrivateKey(privateKey:string,passphrase?:string):{valid:boolean;encrypted:boolean;fingerprint?:string}{
   const withoutPassphrase=parsePrivateKey(privateKey);
   if(!(withoutPassphrase instanceof Error)){
@@ -163,7 +170,7 @@ export async function executeAsMaster(target:SshTargetConfig,key:SshKeyMaterial,
   if(result.exitCode!==0)throw new Error(result.stderr.trim()||'Remote SSH operation failed.');
   return result;
 }
-function b64(value:string):string{return Buffer.from(value,'utf8').toString('base64');}
+export function b64(value:string):string{return Buffer.from(value,'utf8').toString('base64');}
 /** Shell fragment appending one exact line to ~/.ssh/authorized_keys (run from $HOME). */
 function appendAuthorizedKeyShell(authorizedKey:string):string{
   return ['mkdir -p .ssh','chmod 700 .ssh','touch .ssh/authorized_keys','chmod 600 .ssh/authorized_keys','key=$(printf %s '+b64(authorizedKey)+' | base64 -d)','if ! grep -Fqx -- "$key" .ssh/authorized_keys; then if [ -s .ssh/authorized_keys ] && [ -n "$(tail -c 1 .ssh/authorized_keys)" ]; then printf "\\n" >> .ssh/authorized_keys; fi; printf "%s\\n" "$key" >> .ssh/authorized_keys; fi'].join('; ');

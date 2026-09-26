@@ -18,6 +18,10 @@ export class SqliteCommandInstallationStore {
     const rows=this.db.prepare('SELECT * FROM command_installations WHERE user_id=? ORDER BY created_at DESC,id').all(userId) as any[];
     return rows.map(this.map).filter((x):x is CommandInstallationRecord=>x!==undefined);
   }
+  listForTarget(userId:string,targetId:string):CommandInstallationRecord[]{
+    const rows=this.db.prepare('SELECT * FROM command_installations WHERE user_id=? AND target_id=? ORDER BY created_at DESC,id').all(userId,targetId) as any[];
+    return rows.map(this.map).filter((x):x is CommandInstallationRecord=>x!==undefined);
+  }
   create(r:CommandInstallationRecord):void{
     this.db.prepare('INSERT INTO command_installations (id,user_id,command_id,target_id,master_key_id,encrypted_private_key,public_key,fingerprint,remote_script_path,authorized_key_line,script_content,command_sha256,script_sha256,authorized_key_sha256,installed_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run(r.id,r.userId,r.commandId,r.targetId,r.masterKeyId,r.encryptedPrivateKey,r.publicKey,r.fingerprint,r.remoteScriptPath,r.authorizedKeyLine,r.scriptContent??null,r.commandSha256??null,r.scriptSha256??null,r.authorizedKeySha256??null,r.installedAt??null,r.createdAt,r.updatedAt);
   }
