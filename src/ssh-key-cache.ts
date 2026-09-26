@@ -1,5 +1,4 @@
-import ssh2 from 'ssh2';
-const { utils } = ssh2;
+import { parsePrivateKey } from './ssh.js';
 
 const TTL_MS = 15 * 60_000;
 
@@ -11,10 +10,10 @@ function key(userId: string, keyId: string): string {
 }
 
 export function unlockSshKey(userId: string, keyId: string, privateKey: string, passphrase: string): void {
-  const parsed = utils.parseKey(privateKey, passphrase);
+  const parsed = parsePrivateKey(privateKey, passphrase);
   if (parsed instanceof Error) throw new Error('Invalid SSH key or passphrase');
-  const keys = Array.isArray(parsed) ? parsed : [parsed];
-  if (!keys.some(k => typeof k.isPrivateKey === 'function' && k.isPrivateKey())) throw new Error('Not an SSH private key');
+  if (!parsed) throw new Error('Not an SSH private key');
+  clearExpiredSshKeyUnlocks(); // passphrases of keys never read again do not linger in memory
   cache.set(key(userId, keyId), { passphrase, expires: Date.now() + TTL_MS });
 }
 
@@ -33,7 +32,7 @@ export function lockSshKey(userId: string, keyId: string): void {
   cache.delete(key(userId, keyId));
 }
 
-export function clearExpiredSshKeyUnlocks(): void {
+function clearExpiredSshKeyUnlocks(): void {
   const now = Date.now();
   for (const [id, entry] of cache) if (entry.expires < now) cache.delete(id);
 }

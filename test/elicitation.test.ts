@@ -27,7 +27,7 @@ import { FarcmdConnectorImpl, notifyConfirmationChanged } from '../src/connector
 import { SqliteOAuthGrantStore } from '../src/oauth/grants.js';
 import { SqliteCommandStore } from '../src/command-registry.js';
 import { SqliteExecutionStore } from '../src/execution.js';
-import { SqliteCommandKeyStore } from '../src/storage/command-keys.js';
+import { SqliteCommandInstallationStore } from '../src/storage/command-installations.js';
 
 process.env.FARCMD_ENCRYPTION_KEY??=randomBytes(32).toString('base64');
 const PASSWORD='correct horse battery staple';
@@ -164,7 +164,7 @@ test('web Run: level rules, output hiding and audit, without reaching SSH',async
     // Deleting an installed command takes two calls: the first only uninstalls (here queued for cleanup), the second deletes.
     const installed=randomUUID();
     new SqliteCommandStore(f.db).create({id:installed,userId:f.user.id,targetId:target,name:'Installed',description:'',type:'shell',content:'uptime',level:1,enabled:true,createdAt:now,updatedAt:now});
-    new SqliteCommandKeyStore(f.db).create({id:randomUUID(),userId:f.user.id,commandId:installed,targetId:target,masterKeyId:randomUUID(),encryptedPrivateKey:'x',publicKey:'ssh-ed25519 AAAA',fingerprint:'fp',remoteScriptPath:'~/.ssh/farcmd/x.sh',authorizedKeyLine:'restrict ssh-ed25519 AAAA',installedAt:now,createdAt:now,updatedAt:now});
+    new SqliteCommandInstallationStore(f.db).create({id:randomUUID(),userId:f.user.id,commandId:installed,targetId:target,masterKeyId:randomUUID(),encryptedPrivateKey:'x',publicKey:'ssh-ed25519 AAAA',fingerprint:'fp',remoteScriptPath:'~/.ssh/farcmd/x.sh',authorizedKeyLine:'restrict ssh-ed25519 AAAA',installedAt:now,createdAt:now,updatedAt:now});
     const del=()=>f.app.inject({method:'DELETE',url:'/api/commands/'+installed,headers:{cookie:cookieHeader}});
     const findInstalled=async()=>((await f.app.inject({method:'GET',url:'/api/commands',headers:{cookie:cookieHeader}})).json().commands as any[]).find(c=>c.id===installed);
     const first=(await del()).json(); assert.equal(first.commandDeleted,false); assert.equal(first.remoteCleanupPending,true);

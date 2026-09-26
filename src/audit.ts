@@ -1,5 +1,7 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { createHmac, hkdfSync, randomUUID, timingSafeEqual } from 'node:crypto';
+import { masterKey } from './crypto-at-rest.js';
+import { DAY_MS, envRetentionMs } from './config.js';
 
 /**
  * Append-only, tamper-evident audit log (table security_events).
@@ -32,8 +34,7 @@ const SECRET_KEY=/pass(word|phrase)?|secret|private.?key|token|cookie|authorizat
 const MAX_DETAIL_STRING=500;
 
 function chainKey():Buffer{
-  const raw=process.env.FARCMD_ENCRYPTION_KEY; if(!raw)throw new Error('FARCMD_ENCRYPTION_KEY is required');
-  return Buffer.from(hkdfSync('sha256',Buffer.from(raw,'base64'),Buffer.alloc(0),'farcmd-audit-chain-v1',32));
+  return Buffer.from(hkdfSync('sha256',masterKey(),Buffer.alloc(0),'farcmd-audit-chain-v1',32));
 }
 /** Drop secret-looking keys and bound sizes; values are only ever primitives or arrays/objects of them. */
 export function sanitizeDetails(value:unknown,depth=0):unknown{
@@ -123,7 +124,7 @@ export class AuditLog {
     const legacy=Number(this.db.prepare('DELETE FROM security_events WHERE seq IS NULL AND created_at<?').run(cutoff).changes);
     if(!last){if(legacy)this.record({event:'audit.pruned',actor:'system',details:{legacyRemoved:legacy}});return legacy;}
     const removed=Number(this.db.prepare('DELETE FROM security_events WHERE seq IS NOT NULL AND seq<=?').run(last.seq).changes);
-    this.record({event:'audit.pruned',actor:'system',details:{removed:removed+legacy,throughSeq:Number(last.seq),lastRemovedHash:String(last.hash),retentionDays:Math.round(maxAgeMs/86_400_000)}});
+    this.record({event:'audit.pruned',actor:'system',details:{removed:removed+legacy,throughSeq:Number(last.seq),lastRemovedHash:String(last.hash),retentionDays:Math.round(maxAgeMs/DAY_MS)}});
     return removed+legacy;
   }
 
@@ -135,8 +136,4 @@ export class AuditLog {
 }
 
 /** Retention from FARCMD_AUDIT_RETENTION_DAYS (default 365, 0 = keep forever). */
-export function auditRetentionMs():number{
-  const days=Number(process.env.FARCMD_AUDIT_RETENTION_DAYS??'365');
-  if(!Number.isFinite(days)||days<0)throw new Error('FARCMD_AUDIT_RETENTION_DAYS must be a non-negative number');
-  return days*86_400_000;
-}
+export function auditRetentionMs():number{ return envRetentionMs('FARCMD_AUDIT_RETENTION_DAYS'); }

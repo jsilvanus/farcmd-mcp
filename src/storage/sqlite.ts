@@ -1,5 +1,5 @@
 import { mkdirSync } from 'node:fs';
-import { randomUUID, createHash } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import type { AuthStore, McpUser, UserStore, WebSessionRecord, WebSessionStore } from './interface.js';
@@ -7,6 +7,12 @@ import { SqliteOAuthGrantStore } from '../oauth/grants.js';
 import { AuditLog, migrateAuditTable, type AuditOutcome } from '../audit.js';
 import { SqliteOAuthTokenStore, hashToken, migrateOAuthTokenTables } from '../oauth/tokens.js';
 import { migrateMcpAccess } from '../mcp-access.js';
+import { hashCommandContent } from '../command-registry.js';
+
+/** Schema upgrade for older databases: adds each column unless it already exists. */
+export function addColumns(db:DatabaseSync,table:string,columns:string[]):void{
+  for(const column of columns)try{db.exec('ALTER TABLE '+table+' ADD COLUMN '+column);}catch{}
+}
 
 export class SqliteAuthStore implements AuthStore, WebSessionStore {
   private readonly db:DatabaseSync;
@@ -29,34 +35,20 @@ export class SqliteAuthStore implements AuthStore, WebSessionStore {
       // Verification authorities are deliberately a separate table from ssh_keys: they are never provisioning credentials.
       'CREATE TABLE IF NOT EXISTS verification_authorities (id TEXT PRIMARY KEY,user_id TEXT NOT NULL,target_id TEXT NOT NULL,username TEXT NOT NULL,privilege TEXT NOT NULL,encrypted_private_key TEXT NOT NULL,public_key TEXT NOT NULL,fingerprint TEXT NOT NULL,encrypted_secret TEXT NOT NULL,authorized_key_line TEXT NOT NULL,authorized_key_sha256 TEXT NOT NULL,sudoers_sha256 TEXT,python_path TEXT,verifier_sha256 TEXT,status TEXT NOT NULL,installed_at INTEGER,last_verified_at INTEGER,last_error TEXT,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL,UNIQUE(user_id,target_id));'
     );
-    try{this.db.exec('ALTER TABLE ssh_keys ADD COLUMN public_key TEXT');}catch{}
-    try{this.db.exec("ALTER TABLE commands ADD COLUMN type TEXT NOT NULL DEFAULT 'shell'");}catch{}
-    try{this.db.exec("ALTER TABLE commands ADD COLUMN content TEXT NOT NULL DEFAULT ''");}catch{}
+    addColumns(this.db,'ssh_keys',['public_key TEXT']);
+    addColumns(this.db,'commands',["type TEXT NOT NULL DEFAULT 'shell'","content TEXT NOT NULL DEFAULT ''"]);
     try{this.db.exec("UPDATE commands SET content=shell_command WHERE content='' AND shell_command<>''");}catch{}
-    try{this.db.exec("ALTER TABLE commands ADD COLUMN command_sha256 TEXT NOT NULL DEFAULT ''");}catch{}
-    try{const rows=this.db.prepare("SELECT id,type,content FROM commands WHERE command_sha256=''").all() as any[];const update=this.db.prepare('UPDATE commands SET command_sha256=? WHERE id=?');for(const row of rows)update.run(createHash('sha256').update(String(row.type)+'\0'+String(row.content),'utf8').digest('hex'),row.id);}catch{}
+    addColumns(this.db,'commands',["command_sha256 TEXT NOT NULL DEFAULT ''",'execution_password_hash TEXT','show_output_on_approval INTEGER NOT NULL DEFAULT 0','verify_integrity INTEGER NOT NULL DEFAULT 0']);
+    try{const rows=this.db.prepare("SELECT id,type,content FROM commands WHERE command_sha256=''").all() as any[];const update=this.db.prepare('UPDATE commands SET command_sha256=? WHERE id=?');for(const row of rows)update.run(hashCommandContent(row.type,String(row.content)),row.id);}catch{}
     try{this.db.exec("ALTER TABLE command_keys RENAME TO command_installations");}catch{}
-    try{this.db.exec('ALTER TABLE command_installations ADD COLUMN remote_script_path TEXT NOT NULL DEFAULT \'\'');}catch{}
-    try{this.db.exec('ALTER TABLE command_installations ADD COLUMN script_content TEXT');}catch{}
-    try{this.db.exec('ALTER TABLE command_installations ADD COLUMN command_sha256 TEXT');}catch{}
-    try{this.db.exec('ALTER TABLE command_installations ADD COLUMN script_sha256 TEXT');}catch{}
-    try{this.db.exec('ALTER TABLE command_installations ADD COLUMN authorized_key_sha256 TEXT');}catch{}
-    try{this.db.exec('ALTER TABLE command_installations ADD COLUMN authorized_key_line TEXT NOT NULL DEFAULT \'\'');}catch{}
+    addColumns(this.db,'command_installations',["remote_script_path TEXT NOT NULL DEFAULT ''",'script_content TEXT','command_sha256 TEXT','script_sha256 TEXT','authorized_key_sha256 TEXT',"authorized_key_line TEXT NOT NULL DEFAULT ''"]);
     try{this.db.exec("UPDATE command_installations SET remote_script_path='legacy',authorized_key_line=public_key WHERE remote_script_path='' AND authorized_key_line=''");}catch{}
-    try{this.db.exec('ALTER TABLE commands ADD COLUMN execution_password_hash TEXT');}catch{}
-    try{this.db.exec('ALTER TABLE commands ADD COLUMN show_output_on_approval INTEGER NOT NULL DEFAULT 0');}catch{}
-    try{this.db.exec('ALTER TABLE commands ADD COLUMN verify_integrity INTEGER NOT NULL DEFAULT 0');}catch{}
-    try{this.db.exec('ALTER TABLE pending_executions ADD COLUMN exit_code INTEGER');}catch{}
-    try{this.db.exec('ALTER TABLE pending_executions ADD COLUMN stdout TEXT');}catch{}
-    try{this.db.exec('ALTER TABLE pending_executions ADD COLUMN stderr TEXT');}catch{}
-    try{this.db.exec('ALTER TABLE pending_executions ADD COLUMN duration_ms INTEGER');}catch{}
-    try{this.db.exec('ALTER TABLE pending_executions ADD COLUMN signal TEXT');}catch{}
-    try{this.db.exec('ALTER TABLE oauth_grants ADD COLUMN visible_levels TEXT NOT NULL DEFAULT \'\'');}catch{}
-    try{this.db.exec('ALTER TABLE oauth_grants ADD COLUMN level5_permanently_hidden INTEGER NOT NULL DEFAULT 0');}catch{}
+    addColumns(this.db,'pending_executions',['exit_code INTEGER','stdout TEXT','stderr TEXT','duration_ms INTEGER','signal TEXT']);
+    addColumns(this.db,'oauth_grants',["visible_levels TEXT NOT NULL DEFAULT ''",'level5_permanently_hidden INTEGER NOT NULL DEFAULT 0']);
     migrateAuditTable(this.db);
     migrateOAuthTokenTables(this.db);
     migrateMcpAccess(this.db);
-    try{this.db.exec('ALTER TABLE users ADD COLUMN disabled_at INTEGER');}catch{}
+    addColumns(this.db,'users',['disabled_at INTEGER']);
     // Web session tokens are stored as SHA-256 hashes (64 hex chars), like OAuth tokens: a database copy yields no usable sessions.
     try{const legacy=this.db.prepare('SELECT token FROM web_sessions WHERE length(token)<>64').all() as {token:string}[];const update=this.db.prepare('UPDATE web_sessions SET token=? WHERE token=?');for(const row of legacy)update.run(hashToken(row.token),row.token);this.db.prepare('DELETE FROM web_sessions WHERE expires<?').run(Date.now());}catch{}
     // Instance-wide settings managed by the operator (farcmd-admin CLI). Absent keys mean the secure default.

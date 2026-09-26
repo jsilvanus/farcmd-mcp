@@ -16,6 +16,7 @@ import { AuditLog } from '../audit.js';
 import type { McpAccessStatus } from '../mcp-access.js';
 import { chmodSync, existsSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { masterKey } from '../crypto-at-rest.js';
 
 const USAGE=`farcmd-admin — manage farcmd users and settings
 
@@ -97,7 +98,7 @@ export async function main(argv:string[]):Promise<number>{
   const [area,action]=positionals;
   if(values.help||!area){process.stdout.write(USAGE+'\n');return values.help?0:2;}
   // Must be the server's key: it keys the audit log's hash chain (and protects stored credentials).
-  if(Buffer.from(process.env.FARCMD_ENCRYPTION_KEY??'','base64').length!==32)throw new UsageError('FARCMD_ENCRYPTION_KEY must be set to the server\'s base64 32-byte key (it keys the audit log). Tip: node --env-file=.env …');
+  try{masterKey();}catch{throw new UsageError('FARCMD_ENCRYPTION_KEY must be set to the server\'s base64 32-byte key (it keys the audit log). Tip: node --env-file=.env …');}
   const store=new SqliteAuthStore(process.env.STORAGE_PATH??'./data/app.sqlite');
   const admin=new UserAdmin(store.getDatabase());
   const email=()=>{if(!values.email)throw new UsageError('--email is required.');return values.email;};

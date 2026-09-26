@@ -12,7 +12,7 @@ import { SqliteExecutionHistoryStore } from '../src/execution-history.js';
 import { FarcmdConnectorImpl } from '../src/connector.js';
 import { encryptSecret, decryptSecret } from '../src/crypto-at-rest.js';
 import { confirmationForLevel } from '../src/execution.js';
-import { SqliteCommandKeyStore } from '../src/storage/command-keys.js';
+import { SqliteCommandInstallationStore } from '../src/storage/command-installations.js';
 import { buildCommandRestrictedAuthorizedKey, buildFarcmdScript, farcmdScriptPath, sha256Hex } from '../src/ssh.js';
 
 function fixture(){
@@ -57,7 +57,7 @@ test('confirmation policy maps levels 1-3, 4 and 5 correctly',()=>{
 test('command installations are isolated per command and store only encrypted private material',()=>{
   const f=fixture();
   try{
-    const keys=new SqliteCommandKeyStore(f.db);
+    const keys=new SqliteCommandInstallationStore(f.db);
     const commandA=randomUUID(),commandB=randomUUID(),targetId=randomUUID(),masterId=randomUUID();
     const now=Date.now();
     keys.create({id:randomUUID(),userId:f.userId,commandId:commandA,targetId,masterKeyId:masterId,encryptedPrivateKey:'ciphertext',publicKey:'ssh-ed25519 AAAA test',fingerprint:'sha256:test',remoteScriptPath:farcmdScriptPath('https://mcp.example.com',commandA),authorizedKeyLine:'restrict,command="x" ssh-ed25519 AAAA test',installedAt:now,createdAt:now,updatedAt:now});
@@ -250,7 +250,7 @@ test(label+' execution without a verification authority is blocked before any SS
     commands.create({id:commandId,userId:f.userId,targetId,name:'mutating',description:'m',type:'shell',content,level,verifyIntegrity,enabled:true,createdAt:Date.now(),updatedAt:Date.now()});
     const installId=randomUUID(); const script=buildFarcmdScript('http://localhost:5999',commandId,'shell',content);
     const line=buildCommandRestrictedAuthorizedKey('ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAItest',farcmdScriptPath('http://localhost:5999',commandId));
-    new SqliteCommandKeyStore(f.db).create({id:installId,userId:f.userId,commandId,targetId,masterKeyId:randomUUID(),encryptedPrivateKey:encryptSecret('not-a-key','command-installation:'+f.userId+':'+installId),publicKey:'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAItest',fingerprint:'sha256:x',remoteScriptPath:farcmdScriptPath('http://localhost:5999',commandId),authorizedKeyLine:line,scriptContent:script,commandSha256:hashCommandContent('shell',content),scriptSha256:sha256Hex(script),authorizedKeySha256:sha256Hex(line),installedAt:Date.now(),createdAt:Date.now(),updatedAt:Date.now()});
+    new SqliteCommandInstallationStore(f.db).create({id:installId,userId:f.userId,commandId,targetId,masterKeyId:randomUUID(),encryptedPrivateKey:encryptSecret('not-a-key','command-installation:'+f.userId+':'+installId),publicKey:'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAItest',fingerprint:'sha256:x',remoteScriptPath:farcmdScriptPath('http://localhost:5999',commandId),authorizedKeyLine:line,scriptContent:script,commandSha256:hashCommandContent('shell',content),scriptSha256:sha256Hex(script),authorizedKeySha256:sha256Hex(line),installedAt:Date.now(),createdAt:Date.now(),updatedAt:Date.now()});
     new SqliteOAuthGrantStore(f.db).upsert(f.userId,'client','Client',[level],false);
     const connector=new FarcmdConnectorImpl(f.db,'http://localhost:5999');
     const started=Date.now();

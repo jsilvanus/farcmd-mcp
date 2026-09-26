@@ -8,14 +8,10 @@
  *   confirmation requests) per user and OAuth client in any 60-second window (default 30, 0 = off).
  *   Fetching the result of a confirmed request does not count.
  */
+import { envInt } from './config.js';
 export class LimitExceeded extends Error { constructor(message:string){super(message);this.name='LimitExceeded';} }
 export interface ExecutionLimitOptions { maxConcurrent:number; maxPerTarget:number; perClientPerMinute:number; }
 
-function envInt(name:string,fallback:number):number{
-  const raw=process.env[name]; if(raw===undefined||raw==='')return fallback;
-  const n=Number(raw); if(!Number.isInteger(n)||n<0)throw new Error(name+' must be a non-negative integer');
-  return n;
-}
 export function executionLimitOptionsFromEnv():ExecutionLimitOptions{
   const maxConcurrent=envInt('FARCMD_SSH_MAX_CONCURRENT',8), maxPerTarget=envInt('FARCMD_SSH_MAX_PER_TARGET',2);
   if(maxConcurrent<1||maxPerTarget<1)throw new Error('FARCMD_SSH_MAX_CONCURRENT and FARCMD_SSH_MAX_PER_TARGET must be at least 1');

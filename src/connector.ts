@@ -6,8 +6,8 @@ import { executeSshCommand, openSshSession, sha256Hex, type SshExecResult, type 
 import { CapabilityVerificationService } from './capability-verification.js';
 import { AuditLog, type AuditActor, type AuditOutcome } from './audit.js';
 import { SqliteSshStore } from './storage/ssh.js';
-import { SqliteCommandStore, type CommandLevel, hashCommandContent, requiresIntegrityVerification } from './command-registry.js';
-import { SqliteCommandInstallationStore } from './storage/command-installations.js';
+import { SqliteCommandStore, type CommandLevel, type CommandRecord, hashCommandContent, requiresIntegrityVerification } from './command-registry.js';
+import { SqliteCommandInstallationStore, commandInstallationKeyAad } from './storage/command-installations.js';
 import { SqliteOAuthGrantStore } from './oauth/grants.js';
 import { SqliteExecutionStore, confirmationForLevel, type ConfirmationRequirement } from './execution.js';
 import { randomToken } from './oauth/pkce.js';
@@ -41,38 +41,51 @@ export interface FarcmdConnector {
 const confirmationEvents=new EventEmitter(); confirmationEvents.setMaxListeners(0);
 export function notifyConfirmationChanged(token:string):void{confirmationEvents.emit(token);}
 const CONFIRMATION_POLL_MS=2_000;
+/** Integrity verification refused the run; it is already audited, unlike other refusals. */
+class ExecutionBlockedError extends Error { constructor(reason:string){super('Execution blocked: '+reason);this.name='ExecutionBlockedError';} }
 
 export class FarcmdConnectorImpl implements FarcmdConnector {
-  private readonly ssh:SqliteSshStore; private readonly commands:SqliteCommandStore; private readonly grants:SqliteOAuthGrantStore; private readonly pending:SqliteExecutionStore;  private readonly history:SqliteExecutionHistoryStore; private readonly installations:SqliteCommandInstallationStore; private readonly verifier:CapabilityVerificationService; private readonly access:McpAccessPolicy;
+  private readonly ssh:SqliteSshStore; private readonly commands:SqliteCommandStore; private readonly grants:SqliteOAuthGrantStore; private readonly pending:SqliteExecutionStore;  private readonly history:SqliteExecutionHistoryStore; private readonly installations:SqliteCommandInstallationStore; private readonly verifier:CapabilityVerificationService; private readonly access:McpAccessPolicy; private readonly auditLog:AuditLog;
   constructor(private readonly db:DatabaseSync,private readonly publicUrl:string){
-    this.ssh=new SqliteSshStore(db); this.commands=new SqliteCommandStore(db); this.grants=new SqliteOAuthGrantStore(db); this.pending=new SqliteExecutionStore(db); this.pending.cleanup(); this.history=new SqliteExecutionHistoryStore(db); this.installations=new SqliteCommandInstallationStore(db); this.verifier=new CapabilityVerificationService(db,publicUrl); this.access=new McpAccessPolicy(db);
+    this.ssh=new SqliteSshStore(db); this.commands=new SqliteCommandStore(db); this.grants=new SqliteOAuthGrantStore(db); this.pending=new SqliteExecutionStore(db); this.pending.cleanup(); this.history=new SqliteExecutionHistoryStore(db); this.installations=new SqliteCommandInstallationStore(db); this.verifier=new CapabilityVerificationService(db,publicUrl); this.access=new McpAccessPolicy(db); this.auditLog=new AuditLog(db);
+  }
+  /** The client's grant, unless it was revoked. */
+  private activeGrant(userId:string,clientId:string){const grant=this.grants.get(userId,clientId);return grant&&!grant.revokedAt?grant:undefined;}
+  /** The pending request behind token, if it belongs to this user and client. */
+  private ownPending(context:ConnectorContext,token:string){const p=this.pending.get(token);return p&&p.userId===context.userId&&p.clientId===context.clientId?p:undefined;}
+  private pendingResponse(commandId:string,level:CommandLevel,confirmation:ConfirmationRequirement,token:string,expiresAt:number):PendingConfirmation{
+    return {ok:true,pending:true,commandId,level,confirmation,approvalUrl:this.publicUrl+'/?page=confirm&token='+encodeURIComponent(token),confirmationToken:token,expiresAt,next:NEXT_STEP};
+  }
+  /** Level 5: checks the command's execution password and audits the outcome. */
+  private async checkExecutionPassword(userId:string,clientId:string,commandId:string,password:string|undefined,actor:AuditActor):Promise<void>{
+    if(!password)throw new Error('Execution password required.');
+    if(!await this.commands.verifyExecutionPassword(userId,commandId,password)){this.audit(userId,clientId,'command.level5_password_failed',{commandId},'failure',actor);throw new Error('Invalid execution password.');}
+    this.audit(userId,clientId,'command.level5_password_accepted',{commandId},'success',actor);
   }
   // MCP kill switch: health and list_commands stay registered so the client sees why access is refused;
   // no execution tool is exposed while MCP access is off.
   async health(context:ConnectorContext):Promise<{ok:true}>{this.access.assertAllowed(context.userId);return {ok:true};}
-  visibleLevels(context:ConnectorContext):CommandLevel[]{if(!this.access.check(context.userId).allowed)return [];const grant=this.grants.get(context.userId,context.clientId);return grant&&!grant.revokedAt?[...grant.visibleLevels]:[];}
+  visibleLevels(context:ConnectorContext):CommandLevel[]{if(!this.access.check(context.userId).allowed)return [];return [...this.activeGrant(context.userId,context.clientId)?.visibleLevels??[]];}
   async listCommands(context:ConnectorContext):Promise<CommandSummary[]>{
     this.access.assertAllowed(context.userId);
-    const grant=this.grants.get(context.userId,context.clientId);
-    if(!grant||grant.revokedAt)return [];
+    const grant=this.activeGrant(context.userId,context.clientId);
+    if(!grant)return [];
     return this.commands.list(context.userId).filter(c=>c.enabled&&grant.visibleLevels.includes(c.level)).map(c=>({id:c.id,name:c.name,description:c.description,level:c.level,enabled:c.enabled,confirmation:confirmationForLevel(c.level)}));
   }
   async executeCommand(context:ConnectorContext,commandId:string,expectedLevel:CommandLevel,confirmationToken?:string):Promise<CommandExecution|PendingConfirmation>{
     try{
-      const result=await this.executeCommandChecked(context,commandId,expectedLevel,confirmationToken);
-      return result;
+      return await this.executeCommandChecked(context,commandId,expectedLevel,confirmationToken);
     }catch(error){
       // Executions that ran (or were blocked by integrity verification) are audited in executeStoredCommand;
       // this records MCP calls refused before that point (revoked grant, hidden level, wrong tool, disabled command, ...).
-      const message=error instanceof Error?error.message:String(error);
-      if(!/^Execution blocked:/.test(message))this.audit(context.userId,context.clientId,'command.execute_denied',{commandId,level:expectedLevel,error:message},'failure');
+      if(!(error instanceof ExecutionBlockedError))this.audit(context.userId,context.clientId,'command.execute_denied',{commandId,level:expectedLevel,error:error instanceof Error?error.message:String(error)},'failure');
       throw error;
     }
   }
   private async executeCommandChecked(context:ConnectorContext,commandId:string,expectedLevel:CommandLevel,confirmationToken?:string):Promise<CommandExecution|PendingConfirmation>{
     this.access.assertAllowed(context.userId);
-    const grant=this.grants.get(context.userId,context.clientId);
-    if(!grant||grant.revokedAt)throw new Error('This OAuth authorization has been revoked or does not exist.');
+    const grant=this.activeGrant(context.userId,context.clientId);
+    if(!grant)throw new Error('This OAuth authorization has been revoked or does not exist.');
     const command=this.commands.get(context.userId,commandId);
     if(!command)throw new Error('Command not found.');
     if(!command.enabled)throw new Error('Command is disabled.');
@@ -82,16 +95,16 @@ export class FarcmdConnectorImpl implements FarcmdConnector {
     if(!confirmationToken)executionLimits().takeClientCall(context.userId,context.clientId);
     const confirmation=confirmationForLevel(command.level);
     if(confirmation!=='none'){
-      if(confirmationToken){ const pending=this.pending.get(confirmationToken); if(!pending||pending.userId!==context.userId||pending.clientId!==context.clientId||pending.commandId!==commandId||pending.level!==command.level||pending.status==='expired'||pending.status==='consumed')throw new Error('Confirmation request not found or expired.'); if(pending.status==='completed'){const completed=this.pending.consumeCompleted(confirmationToken);if(!completed)throw new Error('Confirmation result is no longer available.');return {ok:true,commandId,level:command.level,...completed};} return {ok:true,pending:true,commandId,level:command.level,confirmation,approvalUrl:this.publicUrl+'/?page=confirm&token='+encodeURIComponent(confirmationToken),confirmationToken,expiresAt:pending.expiresAt,next:NEXT_STEP}; }
+      if(confirmationToken){ const pending=this.ownPending(context,confirmationToken); if(!pending||pending.commandId!==commandId||pending.level!==command.level||pending.status==='expired'||pending.status==='consumed')throw new Error('Confirmation request not found or expired.'); if(pending.status==='completed'){const completed=this.pending.consumeCompleted(confirmationToken);if(!completed)throw new Error('Confirmation result is no longer available.');return {ok:true,commandId,level:command.level,...completed};} return this.pendingResponse(commandId,command.level,confirmation,confirmationToken,pending.expiresAt); }
 
       // No token: continue this client's open request for the command instead of starting a new one.
       const open=this.pending.findOpen(context.userId,context.clientId,commandId,command.level);
       if(open?.status==='completed'){const completed=this.pending.consumeCompleted(open.token);if(completed){this.audit(context.userId,context.clientId,'command.confirmation_result_delivered',{commandId,level:command.level,withoutToken:true});return {ok:true,commandId,level:command.level,...completed};}}
-      else if(open)return {ok:true,pending:true,commandId,level:command.level,confirmation,approvalUrl:this.publicUrl+'/?page=confirm&token='+encodeURIComponent(open.token),confirmationToken:open.token,expiresAt:open.expiresAt,next:NEXT_STEP};
+      else if(open)return this.pendingResponse(commandId,command.level,confirmation,open.token,open.expiresAt);
       const token=randomToken(); const now=Date.now(); const expiresAt=now+5*60_000;
       this.pending.create({token,userId:context.userId,clientId:context.clientId,commandId,level:command.level,createdAt:now,expiresAt});
       this.audit(context.userId,context.clientId,'command.confirmation_requested',{commandId,level:command.level,confirmation});
-      return {ok:true,pending:true,commandId,level:command.level,confirmation,approvalUrl:this.publicUrl+'/?page=confirm&token='+encodeURIComponent(token),confirmationToken:token,expiresAt,next:NEXT_STEP};
+      return this.pendingResponse(commandId,command.level,confirmation,token,expiresAt);
     }
     return this.executeStoredCommand(context.userId,context.clientId,commandId,command.level);
   }
@@ -102,29 +115,25 @@ export class FarcmdConnectorImpl implements FarcmdConnector {
     audit('command.confirmation_attempt',{commandId:p.commandId,level:p.level});
     // A request made before MCP was turned off must not run afterwards.
     const access=this.access.check(p.userId); if(!access.allowed){audit('command.execute_denied',{commandId:p.commandId,level:p.level,error:access.message},'failure');throw new Error(access.message);}
-    const grant=this.grants.get(p.userId,p.clientId); if(!grant||grant.revokedAt||!grant.visibleLevels.includes(p.level))throw new Error('The OAuth authorization is no longer permitted.');
+    const grant=this.activeGrant(p.userId,p.clientId); if(!grant||!grant.visibleLevels.includes(p.level))throw new Error('The OAuth authorization is no longer permitted.');
     const command=this.commands.get(p.userId,p.commandId); if(!command||!command.enabled||command.level!==p.level)throw new Error('The command is no longer available.');
-    const confirmation=confirmationForLevel(p.level);
-    if(confirmation==='password'){
-      if(!password)throw new Error('Execution password required.');
-      if(!await this.commands.verifyExecutionPassword(userId,p.commandId,password)){audit('command.level5_password_failed',{commandId:p.commandId},'failure');throw new Error('Invalid execution password.');}
-      audit('command.level5_password_accepted',{commandId:p.commandId});
-    }
+    if(confirmationForLevel(p.level)==='password')await this.checkExecutionPassword(userId,p.clientId,p.commandId,password,'web');
     if(!this.pending.claim(token))throw new Error('This request was already approved, declined or has expired.');
     let result:CommandExecution;
     try{result=await this.executeStoredCommand(p.userId,p.clientId,p.commandId,p.level,'web');}catch(error){this.pending.release(token);throw error;}
     audit('command.confirmation_executed',{commandId:p.commandId,level:p.level}); this.pending.complete(token,{exitCode:result.exitCode,stdout:result.stdout,stderr:result.stderr,durationMs:result.durationMs,...(result.signal?{signal:result.signal}:{})}); notifyConfirmationChanged(token); return result;
   }
   private audit(userId:string,clientId:string,event:string,details:Record<string,unknown>,outcome:AuditOutcome='success',actor:AuditActor='mcp'):void{
-    new AuditLog(this.db).record({event,actor,outcome,userId,clientId,...(typeof details.commandId==='string'?{targetType:'command',targetId:details.commandId}:{}),details});
+    this.auditLog.record({event,actor,outcome,userId,clientId,...(typeof details.commandId==='string'?{targetType:'command',targetId:details.commandId}:{}),details});
   }
   private async executeStoredCommand(userId:string,clientId:string,commandId:string,level:CommandLevel,actor:AuditActor='mcp'):Promise<CommandExecution>{
-    const targetId=this.commands.get(userId,commandId)?.targetId??'';
-    const release=executionLimits().acquireSsh(targetId);
-    try{return await this.executeStoredCommandNow(userId,clientId,commandId,level,actor);}finally{release();}
-  }
-  private async executeStoredCommandNow(userId:string,clientId:string,commandId:string,level:CommandLevel,actor:AuditActor):Promise<CommandExecution>{
+    // Re-read: the command may have changed while the caller awaited (e.g. a password check).
     const command=this.commands.get(userId,commandId); if(!command||!command.enabled||command.level!==level)throw new Error('Command is no longer available.');
+    const release=executionLimits().acquireSsh(command.targetId);
+    try{return await this.executeStoredCommandNow(userId,clientId,command,actor);}finally{release();}
+  }
+  private async executeStoredCommandNow(userId:string,clientId:string,command:CommandRecord,actor:AuditActor):Promise<CommandExecution>{
+    const commandId=command.id, level=command.level;
     const target=this.ssh.getTarget(userId,command.targetId); if(!target||!target.enabled)throw new Error('SSH target is unavailable.');
     if(!target.hostFingerprint)throw new Error('SSH target has no pinned host fingerprint.');
     const installation=this.installations.get(userId,commandId);
@@ -133,7 +142,7 @@ export class FarcmdConnectorImpl implements FarcmdConnector {
     const expectedCommandHash=hashCommandContent(command.type,command.content);
     if(!installation.commandSha256||installation.commandSha256!==expectedCommandHash)throw new Error('Command capability integrity check failed: stored command definition does not match the installed capability.');
     if((installation.scriptContent!==undefined&&installation.scriptSha256&&sha256Hex(installation.scriptContent)!==installation.scriptSha256)||(installation.authorizedKeySha256&&sha256Hex(installation.authorizedKeyLine)!==installation.authorizedKeySha256))throw new Error('Command capability integrity check failed: stored capability baseline is inconsistent.');
-    const privateKey=decryptSecret(installation.encryptedPrivateKey,'command-installation:'+userId+':'+installation.id);
+    const privateKey=decryptSecret(installation.encryptedPrivateKey,commandInstallationKeyAad(userId,installation.id));
     const config={hostname:target.hostname,port:target.port,username:target.username,hostFingerprint:target.hostFingerprint};
     const startedAt=Date.now();
     let result:SshExecResult;
@@ -152,7 +161,7 @@ export class FarcmdConnectorImpl implements FarcmdConnector {
         const message=error instanceof Error?error.message:String(error);
         this.audit(userId,clientId,'integrity.verification_blocked',{commandId,level,error:message},'failure',actor);
         this.history.create({id:randomUUID(),userId,clientId,commandId,commandName:command.name,targetId:target.id,level,startedAt,endedAt:Date.now(),durationMs:Date.now()-startedAt,exitCode:null,stdout:'',stderr:'',status:'blocked',error:message});
-        throw new Error('Execution blocked: '+message);
+        throw new ExecutionBlockedError(message);
       }
       this.audit(userId,clientId,'integrity.verification_passed',{commandId,level},'success',actor);
       try{result=await (await sessionPromise!).exec('true');}
@@ -172,8 +181,8 @@ export class FarcmdConnectorImpl implements FarcmdConnector {
    */
   async awaitConfirmation(context:ConnectorContext,commandId:string,level:CommandLevel,token:string,signal:AbortSignal):Promise<CommandExecution|undefined>{
     while(!signal.aborted){
-      const p=this.pending.get(token);
-      if(!p||p.userId!==context.userId||p.clientId!==context.clientId||(p.status!=='pending'&&p.status!=='running'&&p.status!=='completed'))return undefined;
+      const p=this.ownPending(context,token);
+      if(!p||(p.status!=='pending'&&p.status!=='running'&&p.status!=='completed'))return undefined;
       if(p.status==='completed'){const r=await this.executeCommand(context,commandId,level,token);return 'pending' in r?undefined:r;}
       await new Promise<void>(resolve=>{
         const done=()=>{clearTimeout(timer);confirmationEvents.off(token,done);signal.removeEventListener('abort',done);resolve();};
@@ -185,7 +194,7 @@ export class FarcmdConnectorImpl implements FarcmdConnector {
   }
   /** The person refused the approval link in their MCP client: the request can no longer be approved. */
   declinePending(context:ConnectorContext,token:string,reason:string):void{
-    const p=this.pending.get(token); if(!p||p.userId!==context.userId||p.clientId!==context.clientId||p.status!=='pending')return;
+    const p=this.ownPending(context,token); if(!p||p.status!=='pending')return;
     this.pending.expire(token); notifyConfirmationChanged(token);
     this.audit(context.userId,context.clientId,'command.confirmation_declined',{commandId:p.commandId,level:p.level,reason});
   }
@@ -201,11 +210,7 @@ export class FarcmdConnectorImpl implements FarcmdConnector {
     if(!command.enabled)throw new Error('Command is disabled.');
     const confirmation=confirmationForLevel(command.level);
     if(confirmation==='human'&&options.confirmed!==true)throw new Error('Level 4 commands must be confirmed before they run.');
-    if(confirmation==='password'){
-      if(!options.password)throw new Error('Execution password required.');
-      if(!await this.commands.verifyExecutionPassword(userId,commandId,options.password)){this.audit(userId,WEB_CLIENT_ID,'command.level5_password_failed',{commandId},'failure','web');throw new Error('Invalid execution password.');}
-      this.audit(userId,WEB_CLIENT_ID,'command.level5_password_accepted',{commandId},'success','web');
-    }
+    if(confirmation==='password')await this.checkExecutionPassword(userId,WEB_CLIENT_ID,commandId,options.password,'web');
     executionLimits().takeClientCall(userId,WEB_CLIENT_ID);
     return this.executeStoredCommand(userId,WEB_CLIENT_ID,commandId,command.level,'web');
   }
