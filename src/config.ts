@@ -1,5 +1,20 @@
 /** Deployment configuration helpers (validated at startup). */
 
+export const DAY_MS=86_400_000;
+
+/** A non-negative integer from the environment, or fallback when unset or empty. */
+export function envInt(name:string,fallback:number):number{
+  const raw=process.env[name]; if(raw===undefined||raw==='')return fallback;
+  const n=Number(raw); if(!Number.isInteger(n)||n<0)throw new Error(name+' must be a non-negative integer');
+  return n;
+}
+/** A retention period in days from the environment (0 = keep forever), in milliseconds. */
+export function envRetentionMs(name:string,defaultDays=365):number{
+  const days=Number(process.env[name]??String(defaultDays));
+  if(!Number.isFinite(days)||days<0)throw new Error(name+' must be a non-negative number');
+  return days*DAY_MS;
+}
+
 /**
  * FARCMD_TRUST_PROXY controls which reverse proxies may set X-Forwarded-For/-Proto:
  *   unset / "false"   trust nobody (direct exposure; request.ip is the TCP peer)

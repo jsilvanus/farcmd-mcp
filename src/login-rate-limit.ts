@@ -22,6 +22,9 @@ export function rateLimit(key:string,max=MAX_ATTEMPTS,windowMs=WINDOW_MS,map=att
 /** Budget key for password sign-ins from one IP, across the web and OAuth sign-in forms. */
 export function loginRateLimit(ip:string):boolean{ return rateLimit('login:'+ip); }
 
+/** Argon2id hash for a new password; the one place farcmd sets password hashing parameters. */
+export function hashPassword(password:string):Promise<string>{ return hash(password,{algorithm:2}); }
+
 let dummyHash:Promise<string>|undefined;
 /**
  * Verifies a password against a stored Argon2id hash. For an unknown account it still runs one

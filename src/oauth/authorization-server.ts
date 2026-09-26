@@ -1,4 +1,4 @@
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyReply } from 'fastify';
 import { loginRateLimit, verifyPassword } from '../login-rate-limit.js';
 import { isActiveUser, type AuthStore, type UserStore } from '../storage/interface.js';
 import { fetchCimdMetadata, isCimdClientId } from './cimd.js';
@@ -11,6 +11,7 @@ const LEVELS=[1,2,3,4,5] as const;
 
 function escapeHtml(value:string):string{return value.replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'","&#39;");}
 function page(title:string,body:string):string{return '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>'+escapeHtml(title)+'</title><style>body{font-family:system-ui,sans-serif;background:#f6f7f9;margin:0;padding:4rem 1rem}main{max-width:520px;margin:0 auto;background:#fff;padding:2rem;border-radius:12px;box-shadow:0 8px 30px rgba(0,0,0,.08)}h1{margin-top:0}label{display:block;margin:.9rem 0 .35rem}input{margin-right:.5rem}button{margin-top:1rem;padding:.7rem 1.1rem;border:0;border-radius:7px;cursor:pointer}.secondary{margin-left:.5rem;background:#eee}.error{color:#b00020}.level{padding:.7rem 0;border-top:1px solid #eee}.muted{color:#666;font-size:.9rem}</style></head><body><main>'+body+'</main></body></html>';}
+function htmlError(reply:FastifyReply,status:number,title:string,heading:string){return reply.code(status).type('text/html').send(page(title,'<h1>'+heading+'</h1>'));}
 function loginPage(oauth:string,error?:string):string{return page('farcmd sign in','<h1>Sign in</h1><p>Sign in to authorize this MCP client.</p>'+(error?'<p class="error">'+escapeHtml(error)+'</p>':'')+'<form method="post" action="/oauth/authorize"><input type="hidden" name="oauth" value="'+escapeHtml(oauth)+'"><label for="email">Email</label><input id="email" name="email" type="email" autocomplete="username" required autofocus><label for="password">Password</label><input id="password" name="password" type="password" autocomplete="current-password" required><button type="submit">Sign in</button></form>');}
 function consentPage(session:string,userName:string,clientName:string,current:number[],permanent5:boolean):string{
  const descriptions=['Safe/read-only operations','Low-impact operations','Normal mutating operations','High-impact operations','Dangerous/destructive operations'];
@@ -29,25 +30,25 @@ function decodeOAuth(value:string):Record<string,string|undefined>{return Object
 function selectedLevels(body:Record<string,string|undefined|string[]>):number[]{const raw=body.level;const values=Array.isArray(raw)?raw:(raw?[raw]:[]);return [...new Set(values.map(Number))].filter(v=>LEVELS.includes(v as any));}
 
 export async function mountAuthorizationServer(app:FastifyInstance,issuer:string,resource:string,secret:Uint8Array,authStore:AuthStore,users:UserStore):Promise<void>{
- app.get('/oauth/authorize',async(request,reply)=>{const q=request.query as Record<string,string|undefined>;try{await validateRequest(q);return reply.type('text/html').send(loginPage(encodeOAuth(q)));}catch{return reply.code(400).type('text/html').send(page('Invalid request','<h1>Invalid authorization request</h1>'));}});
+ app.get('/oauth/authorize',async(request,reply)=>{const q=request.query as Record<string,string|undefined>;try{await validateRequest(q);return reply.type('text/html').send(loginPage(encodeOAuth(q)));}catch{return htmlError(reply,400,'Invalid request','Invalid authorization request');}});
  app.post('/oauth/authorize',async(request,reply)=>{
-  const body=request.body as Record<string,string|undefined|string[]>;if(!body.oauth&&!body.session)return reply.code(400).type('text/html').send(page('Login required','<h1>Login required</h1>'));
-  let q:Record<string,string|undefined>;let metadata:Awaited<ReturnType<typeof validateRequest>>;let userId:string;
+  const body=request.body as Record<string,string|undefined|string[]>;if(!body.oauth&&!body.session)return htmlError(reply,400,'Login required','Login required');
+  let q:Record<string,string|undefined>;let oauthValue:string;let metadata:Awaited<ReturnType<typeof validateRequest>>;let userId:string;
   try{
-   if(body.session){const session=authStore.oauthTokens().getLoginSession(String(body.session));if(!session||session.expires<Date.now())throw new Error('Expired login session');q=decodeOAuth(session.oauth);userId=session.userId;}
-   else{q=decodeOAuth(body.oauth as string);if(!body.email||!body.password)throw new Error('Login required');if(!loginRateLimit(request.ip)){authStore.recordSecurityEvent?.(undefined,q.client_id,'oauth.login',{reason:'rate limited',ip:request.ip},'failure');return reply.code(429).type('text/html').send(loginPage(body.oauth as string,'Too many sign-in attempts. Try again later.'));}const user=users.getUserByEmail(String(body.email).trim());if(!(await verifyPassword(user?.passwordHash,String(body.password)))||!user||!isActiveUser(user)){authStore.recordSecurityEvent?.(user?.id,q.client_id,'oauth.login',{email:String(body.email).slice(0,320),ip:request.ip},'failure');return reply.code(401).type('text/html').send(loginPage(body.oauth as string,'Invalid email or password.'));}userId=user.id;}
+   if(body.session){const session=authStore.oauthTokens().getLoginSession(String(body.session));if(!session||session.expires<Date.now())throw new Error('Expired login session');oauthValue=session.oauth;q=decodeOAuth(oauthValue);userId=session.userId;}
+   else{oauthValue=body.oauth as string;q=decodeOAuth(oauthValue);if(!body.email||!body.password)throw new Error('Login required');if(!loginRateLimit(request.ip)){authStore.recordSecurityEvent?.(undefined,q.client_id,'oauth.login',{reason:'rate limited',ip:request.ip},'failure');return reply.code(429).type('text/html').send(loginPage(body.oauth as string,'Too many sign-in attempts. Try again later.'));}const user=users.getUserByEmail(String(body.email).trim());if(!(await verifyPassword(user?.passwordHash,String(body.password)))||!user||!isActiveUser(user)){authStore.recordSecurityEvent?.(user?.id,q.client_id,'oauth.login',{email:String(body.email).slice(0,320),ip:request.ip},'failure');return reply.code(401).type('text/html').send(loginPage(body.oauth as string,'Invalid email or password.'));}userId=user.id;}
    metadata=await validateRequest(q);
-  }catch{return reply.code(400).type('text/html').send(page('Invalid request','<h1>Invalid authorization request</h1>'));}
-  const user=users.getUser(userId);if(!isActiveUser(user))return reply.code(401).type('text/html').send(page('Invalid account','<h1>Invalid account</h1>'));
-  if(body.action===undefined){const session=randomToken();const oauthValue=typeof body.oauth==='string'?body.oauth:(body.session?authStore.oauthTokens().getLoginSession(String(body.session))?.oauth:undefined);if(!oauthValue)return reply.code(400).type('text/html').send(page('Invalid request','<h1>Invalid authorization session</h1>'));authStore.oauthTokens().saveLoginSession(session,{userId:user.id,oauth:oauthValue,expires:Date.now()+5*60_000});const grant=authStore.getOAuthGrant(user.id,q.client_id!);const levels=grant?.visibleLevels??[1,2,3];// The consent form's response redirects to the client, so form-action must allow its redirect_uri.
+  }catch{return htmlError(reply,400,'Invalid request','Invalid authorization request');}
+  const user=users.getUser(userId);if(!isActiveUser(user))return htmlError(reply,401,'Invalid account','Invalid account');
+  if(body.action===undefined){const session=randomToken();authStore.oauthTokens().saveLoginSession(session,{userId:user.id,oauth:oauthValue,expires:Date.now()+5*60_000});const grant=authStore.getOAuthGrant(user.id,q.client_id!);const levels=grant?.visibleLevels??[1,2,3];// The consent form's response redirects to the client, so form-action must allow its redirect_uri.
   reply.header('Content-Security-Policy',contentSecurityPolicy([redirectSource(q.redirect_uri!)]));return reply.type('text/html').send(consentPage(session,user.name,metadata.client_name,levels,!!grant?.level5PermanentlyHidden));}
-  if(!body.session)return reply.code(400).type('text/html').send(page('Invalid session','<h1>Invalid authorization session</h1>'));
-  if(!authStore.oauthTokens().consumeLoginSession(String(body.session)))return reply.code(400).type('text/html').send(page('Expired session','<h1>Authorization session expired</h1>'));
+  if(!body.session)return htmlError(reply,400,'Invalid session','Invalid authorization session');
+  if(!authStore.oauthTokens().consumeLoginSession(String(body.session)))return htmlError(reply,400,'Expired session','Authorization session expired');
   const target=new URL(q.redirect_uri!);target.searchParams.set('iss',issuer);if(q.state)target.searchParams.set('state',q.state);
   if(body.action!=='approve'){authStore.recordSecurityEvent?.(user.id,q.client_id,'oauth.authorize',{clientName:metadata.client_name,decision:'denied'},'failure');target.searchParams.set('error','access_denied');return reply.redirect(target.toString());}
   const allowed=selectedLevels(body);const permanent5=body.permanentLevel5==='yes';const existing=authStore.getOAuthGrant(user.id,q.client_id!);
-  if(existing?.level5PermanentlyHidden&&allowed.includes(5)){return reply.code(400).type('text/html').send(page('Permission denied','<h1>Level 5 is permanently prohibited for this OAuth source.</h1>'));}
-  if(permanent5&&allowed.includes(5))return reply.code(400).type('text/html').send(page('Invalid selection','<h1>Level 5 cannot be both allowed and permanently prohibited.</h1>'));
+  if(existing?.level5PermanentlyHidden&&allowed.includes(5)){return htmlError(reply,400,'Permission denied','Level 5 is permanently prohibited for this OAuth source.');}
+  if(permanent5&&allowed.includes(5))return htmlError(reply,400,'Invalid selection','Level 5 cannot be both allowed and permanently prohibited.');
   authStore.upsertOAuthGrant(user.id,q.client_id!,metadata.client_name,allowed,permanent5||!!existing?.level5PermanentlyHidden);
   authStore.recordSecurityEvent?.(user.id,q.client_id,'oauth.authorize',{clientName:metadata.client_name,decision:'approved',visibleLevels:allowed,level5PermanentlyHidden:permanent5||!!existing?.level5PermanentlyHidden,previousVisibleLevels:existing?.visibleLevels??null});
   const code=randomToken();authStore.oauthTokens().saveAuthorizationCode(code,{clientId:q.client_id!,redirectUri:q.redirect_uri!,challenge:q.code_challenge!,subject:user.id,scope:q.scope??'mcp',expires:Date.now()+60_000});
@@ -61,14 +62,15 @@ export async function mountAuthorizationServer(app:FastifyInstance,issuer:string
   const b=request.body as Record<string,string|undefined>;
   const tokens=authStore.oauthTokens();
   const issued=(subject:string,clientId:string,grantType:string,extra:Record<string,unknown>={})=>authStore.recordSecurityEvent?.(subject,clientId,'oauth.token',{grantType,...extra});
+  /** Why no token may be issued for this user and client any more, if so. */
+  const unusable=(subject:string,clientId:string)=>{const grant=authStore.getOAuthGrant(subject,clientId);return !grant||grant.revokedAt?'grant revoked':!isActiveUser(users.getUser(subject))?'account disabled or deleted':undefined;};
   const denied=(subject:string|undefined,clientId:string|undefined,grantType:string,reason:string,event='oauth.token')=>{authStore.recordSecurityEvent?.(subject,clientId,event,{grantType,reason},'failure');return reply.code(400).send({error:'invalid_grant'});};
   if(b.grant_type==='authorization_code'){
    const redemption=b.code?tokens.redeemAuthorizationCode(b.code):{status:'unknown' as const};
    if(redemption.status==='reused')return denied(redemption.code.subject,redemption.code.clientId,'authorization_code','authorization code reused; '+redemption.revokedTokens+' refresh token(s) issued from it revoked','oauth.code_reuse');
    if(redemption.status!=='ok')return denied(undefined,b.client_id,'authorization_code',redemption.status==='expired'?'expired code':'unknown code');
-   const code=redemption.code; const grant=authStore.getOAuthGrant(code.subject,code.clientId);
-   if(!grant||grant.revokedAt)return denied(code.subject,code.clientId,'authorization_code','grant revoked');
-   if(!isActiveUser(users.getUser(code.subject)))return denied(code.subject,code.clientId,'authorization_code','account disabled or deleted');
+   const code=redemption.code; const codeRefused=unusable(code.subject,code.clientId);
+   if(codeRefused)return denied(code.subject,code.clientId,'authorization_code',codeRefused);
    if(b.client_id!==code.clientId||b.redirect_uri!==code.redirectUri||!b.code_verifier||!verifyS256(b.code_verifier,code.challenge))return denied(code.subject,b.client_id,'authorization_code','binding mismatch');
    issued(code.subject,code.clientId,'authorization_code',{scope:code.scope});authStore.touchOAuthGrant(code.subject,code.clientId);
    const access=await issueAccessToken(secret,issuer,resource,code.subject,code.clientId,code.scope);
@@ -79,9 +81,8 @@ export async function mountAuthorizationServer(app:FastifyInstance,issuer:string
    const current=b.refresh_token?tokens.peekRefreshToken(b.refresh_token):undefined;
    if(!current||!b.refresh_token)return denied(undefined,b.client_id,'refresh_token','unknown or expired refresh token');
    if(b.client_id!==current.clientId)return denied(current.subject,b.client_id,'refresh_token','client mismatch');
-   const grant=authStore.getOAuthGrant(current.subject,current.clientId);
-   if(!grant||grant.revokedAt)return denied(current.subject,current.clientId,'refresh_token','grant revoked');
-   if(!isActiveUser(users.getUser(current.subject)))return denied(current.subject,current.clientId,'refresh_token','account disabled or deleted');
+   const refreshRefused=unusable(current.subject,current.clientId);
+   if(refreshRefused)return denied(current.subject,current.clientId,'refresh_token',refreshRefused);
    const rotation=tokens.rotateRefreshToken(b.refresh_token);
    if(rotation.status==='reused')return denied(rotation.previous.subject,rotation.previous.clientId,'refresh_token','refresh token reused; token family revoked ('+rotation.revokedTokens+' active token(s))','oauth.refresh_token_reuse');
    if(rotation.status!=='ok')return denied(current.subject,current.clientId,'refresh_token',rotation.status+' refresh token');

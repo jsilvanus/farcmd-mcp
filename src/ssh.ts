@@ -14,29 +14,40 @@ export function sha256Hex(value:string|Buffer):string{return createHash('sha256'
 const MAX_OUTPUT_BYTES=Number(process.env.FARCMD_MAX_OUTPUT_BYTES??'262144');
 if(!Number.isSafeInteger(MAX_OUTPUT_BYTES)||MAX_OUTPUT_BYTES<4096||MAX_OUTPUT_BYTES>10_485_760)throw new Error('FARCMD_MAX_OUTPUT_BYTES must be 4096-10485760');
 
-function privateKeyFingerprint(privateKey:string, passphrase?:string):string|undefined {
+type ParsedKey=Exclude<ReturnType<typeof utils.parseKey>,Error|unknown[]>;
+/** Parses an SSH key: an Error when it cannot be parsed (with this passphrase), else its private key, if any. */
+export function parsePrivateKey(privateKey:string,passphrase?:string):Error|ParsedKey|undefined{
   const parsed=utils.parseKey(privateKey,passphrase);
-  if(parsed instanceof Error)return undefined;
-  const keys=Array.isArray(parsed)?parsed:[parsed];
-  const key=keys.find(k=>typeof k.isPrivateKey==='function'&&k.isPrivateKey());
+  if(parsed instanceof Error)return parsed;
+  return (Array.isArray(parsed)?parsed:[parsed]).find(k=>typeof k.isPrivateKey==='function'&&k.isPrivateKey());
+}
+
+function fingerprintOf(key:ParsedKey|undefined):string|undefined {
   if(!key)return undefined;
   // getPublicSSH() returns the SSH wire-format public key blob (a Buffer), not an OpenSSH text line.
   const blob=key.getPublicSSH() as Buffer|string;
-  const raw=typeof blob==='string'?Buffer.from(blob.trim().split(/\s+/)[1]??'','base64'):blob;
+  let raw:Buffer; try{raw=typeof blob==='string'?publicKeyBlob(blob):blob;}catch{return undefined;}
   if(!raw.length)return undefined;
   return 'sha256:'+createHash('sha256').update(raw).digest('base64url');
 }
 
+/** A fresh ed25519 key pair for a forced-command key; fingerprint is undefined only if it cannot be computed. */
+export function generateEd25519KeyPair(comment:string):{publicKey:string;privateKey:string;fingerprint:string|undefined}{
+  const generated=utils.generateKeyPairSync('ed25519',{comment});
+  const privateKey=String(generated.private);
+  return {publicKey:String(generated.public).trim(),privateKey,fingerprint:inspectPrivateKey(privateKey).fingerprint};
+}
+
 export function inspectPrivateKey(privateKey:string,passphrase?:string):{valid:boolean;encrypted:boolean;fingerprint?:string}{
-  const withoutPassphrase=utils.parseKey(privateKey);
+  const withoutPassphrase=parsePrivateKey(privateKey);
   if(!(withoutPassphrase instanceof Error)){
-    const fingerprint=privateKeyFingerprint(privateKey);
+    const fingerprint=fingerprintOf(withoutPassphrase);
     return {valid:true,encrypted:false,...(fingerprint?{fingerprint}:{})};
   }
   if(passphrase!==undefined){
-    const withPassphrase=utils.parseKey(privateKey,passphrase);
+    const withPassphrase=parsePrivateKey(privateKey,passphrase);
     if(!(withPassphrase instanceof Error)){
-      const fingerprint=privateKeyFingerprint(privateKey,passphrase);
+      const fingerprint=fingerprintOf(withPassphrase);
       return {valid:true,encrypted:true,...(fingerprint?{fingerprint}:{})};
     }
   }
@@ -159,7 +170,7 @@ export async function executeAsMaster(target:SshTargetConfig,key:SshKeyMaterial,
   if(result.exitCode!==0)throw new Error(result.stderr.trim()||'Remote SSH operation failed.');
   return result;
 }
-function b64(value:string):string{return Buffer.from(value,'utf8').toString('base64');}
+export function b64(value:string):string{return Buffer.from(value,'utf8').toString('base64');}
 /** Shell fragment appending one exact line to ~/.ssh/authorized_keys (run from $HOME). */
 function appendAuthorizedKeyShell(authorizedKey:string):string{
   return ['mkdir -p .ssh','chmod 700 .ssh','touch .ssh/authorized_keys','chmod 600 .ssh/authorized_keys','key=$(printf %s '+b64(authorizedKey)+' | base64 -d)','if ! grep -Fqx -- "$key" .ssh/authorized_keys; then if [ -s .ssh/authorized_keys ] && [ -n "$(tail -c 1 .ssh/authorized_keys)" ]; then printf "\\n" >> .ssh/authorized_keys; fi; printf "%s\\n" "$key" >> .ssh/authorized_keys; fi'].join('; ');

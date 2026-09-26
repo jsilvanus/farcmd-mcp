@@ -1,5 +1,7 @@
 import type { DatabaseSync } from 'node:sqlite';
 
+/** Encryption AAD binding a stored command capability key to its owner and installation ID. */
+export function commandInstallationKeyAad(userId:string,installationId:string):string{ return 'command-installation:'+userId+':'+installationId; }
 export interface CommandInstallationRecord {
   id:string; userId:string; commandId:string; targetId:string; masterKeyId:string;
   encryptedPrivateKey:string; publicKey:string; fingerprint:string;
@@ -12,11 +14,12 @@ export class SqliteCommandInstallationStore {
   get(userId:string,commandId:string):CommandInstallationRecord|undefined{
     return this.map(this.db.prepare('SELECT * FROM command_installations WHERE user_id=? AND command_id=?').get(userId,commandId) as any);
   }
-  getById(userId:string,id:string):CommandInstallationRecord|undefined{
-    return this.map(this.db.prepare('SELECT * FROM command_installations WHERE user_id=? AND id=?').get(userId,id) as any);
-  }
   list(userId:string):CommandInstallationRecord[]{
     const rows=this.db.prepare('SELECT * FROM command_installations WHERE user_id=? ORDER BY created_at DESC,id').all(userId) as any[];
+    return rows.map(this.map).filter((x):x is CommandInstallationRecord=>x!==undefined);
+  }
+  listForTarget(userId:string,targetId:string):CommandInstallationRecord[]{
+    const rows=this.db.prepare('SELECT * FROM command_installations WHERE user_id=? AND target_id=? ORDER BY created_at DESC,id').all(userId,targetId) as any[];
     return rows.map(this.map).filter((x):x is CommandInstallationRecord=>x!==undefined);
   }
   create(r:CommandInstallationRecord):void{

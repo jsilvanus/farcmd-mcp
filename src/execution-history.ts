@@ -1,6 +1,7 @@
 import type { DatabaseSync } from 'node:sqlite';
 import type { CommandLevel } from './command-registry.js';
 import { AuditLog } from './audit.js';
+import { DAY_MS, envRetentionMs } from './config.js';
 
 /** 'blocked' = refused before execution (e.g. failed integrity verification); nothing ran on the target. */
 export type ExecutionStatus='success'|'failed'|'timeout'|'blocked';
@@ -40,7 +41,7 @@ export class SqliteExecutionHistoryStore {
     const perUser=this.db.prepare('SELECT user_id,COUNT(*) AS n FROM execution_history WHERE started_at<? GROUP BY user_id').all(cutoff) as {user_id:string;n:number}[];
     if(!perUser.length)return 0;
     const removed=Number(this.db.prepare('DELETE FROM execution_history WHERE started_at<?').run(cutoff).changes);
-    const audit=new AuditLog(this.db); const retentionDays=Math.round(maxAgeMs/86_400_000);
+    const audit=new AuditLog(this.db); const retentionDays=Math.round(maxAgeMs/DAY_MS);
     for(const r of perUser)audit.record({event:'execution_history.pruned',actor:'system',userId:r.user_id,details:{removed:Number(r.n),retentionDays}});
     return removed;
   }
@@ -48,8 +49,4 @@ export class SqliteExecutionHistoryStore {
 }
 
 /** Execution history retention from FARCMD_EXECUTION_RETENTION_DAYS (default 365, 0 = keep forever). */
-export function executionRetentionMs():number{
-  const days=Number(process.env.FARCMD_EXECUTION_RETENTION_DAYS??'365');
-  if(!Number.isFinite(days)||days<0)throw new Error('FARCMD_EXECUTION_RETENTION_DAYS must be a non-negative number');
-  return days*86_400_000;
-}
+export function executionRetentionMs():number{ return envRetentionMs('FARCMD_EXECUTION_RETENTION_DAYS'); }

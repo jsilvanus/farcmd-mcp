@@ -4,7 +4,6 @@ import formbody from '@fastify/formbody';
 import cookie from '@fastify/cookie';
 import fastifyStatic from '@fastify/static';
 import { fileURLToPath } from 'node:url';
-import { hash } from '@node-rs/argon2';
 import { randomUUID } from 'node:crypto';
 import { FarcmdConnectorImpl } from './connector.js';
 import { mountMcpHttp } from './mcp/http.js';
@@ -18,6 +17,8 @@ import { SqliteExecutionHistoryStore, executionRetentionMs } from './execution-h
 import { parseTrustProxy, productionConfigProblems } from './config.js';
 import { executionLimits } from './limits.js';
 import { contentSecurityPolicy } from './csp.js';
+import { masterKey } from './crypto-at-rest.js';
+import { hashPassword } from './login-rate-limit.js';
 import { VERSION } from './version.js';
 
 const problems=productionConfigProblems(process.env);
@@ -27,8 +28,7 @@ const port=Number(process.env.PORT??'5999');
 const publicUrl=process.env.MCP_PUBLIC_URL??('http://localhost:'+port);
 const secretText=process.env.JWT_SECRET;
 const defaultUserPassword=process.env.MCP_DEFAULT_USER_PASSWORD;
-if(!process.env.FARCMD_ENCRYPTION_KEY)throw new Error('FARCMD_ENCRYPTION_KEY is required');
-if(process.env.FARCMD_ENCRYPTION_KEY){const key=Buffer.from(process.env.FARCMD_ENCRYPTION_KEY,'base64');if(key.length!==32)throw new Error('FARCMD_ENCRYPTION_KEY must decode to exactly 32 bytes');}
+masterKey(); // validates FARCMD_ENCRYPTION_KEY at startup
 if(!Number.isInteger(port)||port<=0)throw new Error('Invalid PORT');
 if(!secretText)throw new Error('JWT_SECRET is required');
 const secret=Buffer.from(secretText,'base64');if(secret.length<32)throw new Error('JWT_SECRET must decode to at least 32 bytes');
@@ -37,7 +37,7 @@ const store=new SqliteAuthStore(storagePath);
 const users=new SqliteUserStore(store.getDatabase());
 const defaultUserEmail=process.env.MCP_DEFAULT_USER_EMAIL??'demo@example.com';
 const existingDefault=users.getUserByEmail(defaultUserEmail);
-if(!existingDefault&&defaultUserPassword){users.createUser({id:process.env.MCP_DEFAULT_USER_ID??randomUUID(),name:'Default User',email:defaultUserEmail,passwordHash:await hash(defaultUserPassword,{algorithm:2}),createdAt:Date.now()});}
+if(!existingDefault&&defaultUserPassword){users.createUser({id:process.env.MCP_DEFAULT_USER_ID??randomUUID(),name:'Default User',email:defaultUserEmail,passwordHash:await hashPassword(defaultUserPassword),createdAt:Date.now()});}
 // Audit log retention (FARCMD_AUDIT_RETENTION_DAYS, default 365, 0 = keep forever): prune at start and daily.
 const retentionMs=auditRetentionMs();
 if(retentionMs>0){store.cleanupSecurityEvents(retentionMs);setInterval(()=>store.cleanupSecurityEvents(retentionMs),86_400_000).unref();}
@@ -46,12 +46,14 @@ const executionRetention=executionRetentionMs();
 if(executionRetention>0){const history=new SqliteExecutionHistoryStore(store.getDatabase());history.prune(executionRetention);setInterval(()=>history.prune(executionRetention),86_400_000).unref();}
 const options:FastifyHttpOptions<Server>={logger:true,bodyLimit:256*1024,trustProxy:parseTrustProxy(process.env.FARCMD_TRUST_PROXY)};
 const app=Fastify(options);
-app.addHook('onSend',async(_request,reply,payload)=>{reply.header('X-Content-Type-Options','nosniff').header('X-Frame-Options','DENY').header('Referrer-Policy','no-referrer');if(process.env.NODE_ENV==='production')reply.header('Strict-Transport-Security','max-age=31536000; includeSubDomains');if(process.env.NODE_ENV==='production'&&!reply.hasHeader('Content-Security-Policy'))reply.header('Content-Security-Policy',contentSecurityPolicy());return payload;});
-await app.register(formbody);await app.register(cookie);await mountWebApi(app,users,store);
-if(process.env.NODE_ENV==='production')await app.register(fastifyStatic,{root:fileURLToPath(new URL('./web/',import.meta.url)),prefix:'/'});
+const production=process.env.NODE_ENV==='production';
+const defaultCsp=contentSecurityPolicy();
+app.addHook('onSend',async(_request,reply,payload)=>{reply.header('X-Content-Type-Options','nosniff').header('X-Frame-Options','DENY').header('Referrer-Policy','no-referrer');if(production){reply.header('Strict-Transport-Security','max-age=31536000; includeSubDomains');if(!reply.hasHeader('Content-Security-Policy'))reply.header('Content-Security-Policy',defaultCsp);}return payload;});
+await app.register(formbody);await app.register(cookie);await mountWebApi(app,users,store,publicUrl);
+if(production)await app.register(fastifyStatic,{root:fileURLToPath(new URL('./web/',import.meta.url)),prefix:'/'});
 await mountOAuthMetadata(app,publicUrl);
 await mountAuthorizationServer(app,publicUrl,publicUrl+'/mcp',secret,store,users);
 await mountMcpHttp(app,{connector:new FarcmdConnectorImpl(store.getDatabase(),publicUrl),publicUrl,jwtSecret:secret,resource:publicUrl+'/mcp',isUserActive:id=>isActiveUser(users.getUser(id))});
 app.get('/health',{logLevel:'silent'},async()=>({ok:true}));
-app.get('/',async(_request,reply)=>{if(process.env.NODE_ENV==='production')return reply.sendFile('index.html');return {name:'farcmd-mcp',version:VERSION,mcp:'/mcp',web:'/'};});
+app.get('/',async(_request,reply)=>{if(production)return reply.sendFile('index.html');return {name:'farcmd-mcp',version:VERSION,mcp:'/mcp',web:'/'};});
 await app.listen({host:process.env.HOST??'0.0.0.0',port});

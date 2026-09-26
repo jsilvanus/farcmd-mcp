@@ -27,14 +27,20 @@ function shell(title:string, body:string) {
   document.querySelector('#logout')?.addEventListener('click', async () => { await api('/api/auth/logout',{method:'POST'}); user=null; render('login'); });
 }
 
-function render(page='commands') {
+/** The page a ?page=confirm&token= or ?page=unlock&key= link asks for, else Commands. */
+function landing():[string,string?] {
+  const params=new URLSearchParams(location.search); const token=params.get('token'); const key=params.get('key');
+  return params.get('page')==='confirm'&&token?['confirm',token]:params.get('page')==='unlock'&&key?['unlock',key]:['commands'];
+}
+
+function render(page='commands', arg?:string) {
   if (!user) {
     shell('Sign in', '<form id="login"><label>Email<input name="email" type="email" required autocomplete="username"></label><label>Password<input name="password" type="password" required autocomplete="current-password"></label><button>Sign in</button></form><p id="error"></p><p id="register-row" hidden><a href="#" id="register">Create an account</a></p><p id="register-closed" hidden><small>New accounts are created by the administrator.</small></p>');
     // Self-service registration is shown only when the operator enabled it (farcmd-admin registration enable).
     api('/api/auth/config').then(c=>{document.querySelector<HTMLElement>(c.registrationEnabled?'#register-row':'#register-closed')?.removeAttribute('hidden');}).catch(()=>undefined);
     document.querySelector<HTMLFormElement>('#login')!.onsubmit = async e => {
       e.preventDefault();
-      try { const f=new FormData(e.currentTarget as HTMLFormElement); const r=await api('/api/auth/login',{method:'POST',body:JSON.stringify({email:f.get('email'),password:f.get('password')})}); user=r.user; const params=new URLSearchParams(location.search); if(params.get('page')==='confirm'&&params.get('token')){(window as any).__confirmToken=params.get('token');render('confirm');} else if(params.get('page')==='unlock'&&params.get('key')){(window as any).__unlockKeyId=params.get('key');render('unlock');} else render(); }
+      try { const f=new FormData(e.currentTarget as HTMLFormElement); const r=await api('/api/auth/login',{method:'POST',body:JSON.stringify({email:f.get('email'),password:f.get('password')})}); user=r.user; render(...landing()); }
       catch (err) { document.querySelector('#error')!.textContent=(err as Error).message; }
     };
     document.querySelector('#register')!.addEventListener('click', e => { e.preventDefault(); register(); });
@@ -46,7 +52,7 @@ function render(page='commands') {
   else if (page==='audit') auditPage();
   else if (page==='ssh') sshPage();
   else if (page==='commands') commandsPage();
-  else if (page==='unlock') unlockPage((window as any).__unlockKeyId); else if (page==='confirm') confirmPage((window as any).__confirmToken);
+  else if (page==='unlock') unlockPage(arg!); else if (page==='confirm') confirmPage(arg!);
   else commandsPage();
 }
 
@@ -172,7 +178,7 @@ async function sshPage() {
       await api('/api/ssh/keys/'+k.id,{method:'PATCH',body:JSON.stringify({name:new FormData(form).get('name')})}); sshPage();});});
   on('[data-copy-public]',async b=>{const k=keys.find(x=>x.id===b.dataset.copyPublic); if(!k?.publicKey)return;
     try{await navigator.clipboard.writeText(k.publicKey); b.textContent='Copied';}catch{openDialog('Public key','<pre class="mono">'+escapeHtml(k.publicKey)+'</pre><div class="dialog-actions"><button data-dialog-close>Close</button></div>');}});
-  on('[data-unlock]',b=>{(window as any).__unlockKeyId=b.dataset.unlock; render('unlock');});
+  on('[data-unlock]',b=>render('unlock',b.dataset.unlock));
   on('[data-lock]',async b=>{await api('/api/ssh/keys/'+b.dataset.lock+'/lock',{method:'POST'}); sshPage();});
   on('[data-delete-key]',async b=>{if(confirm('Delete this master key?\n\nInstalled commands keep running, and level 3–5 commands keep being verified. Until you add a master key again and select it on the target (Edit), farcmd cannot install, change or remove capabilities, install verifiers automatically, clean up the ledger or read shell history on its targets. Removed capabilities wait in the cleanup ledger.\n\nIf farcmd generated this key, it cannot be restored: remove its line from the targets\' authorized_keys.')){try{await api('/api/ssh/keys/'+b.dataset.deleteKey,{method:'DELETE'});}catch(err){alert((err as Error).message);} sshPage();}});
 
@@ -235,7 +241,7 @@ function verifierRootPage(targetId:string,t:any,keys:any[],action:'install'|'rem
 }
 function unlockPage(keyId:string) {
   shell('Unlock SSH key','<p>The passphrase is used only in memory and is not stored in the database.</p><form id="unlock-form"><label>Passphrase<input name="passphrase" type="password" autocomplete="current-password" required></label><button>Unlock for 15 minutes</button></form><p id="unlock-error"></p>');
-  document.querySelector<HTMLFormElement>('#unlock-form')!.onsubmit=async e=>{e.preventDefault();try{const f=new FormData(e.currentTarget as HTMLFormElement);await api('/api/ssh/keys/'+keyId+'/unlock',{method:'POST',body:JSON.stringify({passphrase:f.get('passphrase')})});delete (window as any).__unlockKeyId;render('ssh');}catch(err){document.querySelector('#unlock-error')!.textContent=(err as Error).message;}};
+  document.querySelector<HTMLFormElement>('#unlock-form')!.onsubmit=async e=>{e.preventDefault();try{const f=new FormData(e.currentTarget as HTMLFormElement);await api('/api/ssh/keys/'+keyId+'/unlock',{method:'POST',body:JSON.stringify({passphrase:f.get('passphrase')})});render('ssh');}catch(err){document.querySelector('#unlock-error')!.textContent=(err as Error).message;}};
 }
 async function commandsPage(){
   const [cr,tr]=await Promise.all([api('/api/commands'),api('/api/ssh/targets')]);
@@ -407,7 +413,7 @@ function runCommand(c:any){
 /** Leaves the approval page: closes the tab when the browser allows it (it was opened from a link), otherwise shows Commands. */
 function closeApproval(){
   window.close();
-  setTimeout(()=>{delete (window as any).__confirmToken; history.replaceState(null,'',location.pathname); render('commands');},150);
+  setTimeout(()=>{history.replaceState(null,'',location.pathname); render('commands');},150);
 }
 const CLOSE_APPROVAL='<button type="button" data-close-approval>Close</button>';
 async function confirmPage(token:string) {
@@ -447,8 +453,7 @@ function settings() {
 }
 
 async function boot() {
-  const params=new URLSearchParams(location.search); const page=params.get('page'); const token=params.get('token'); if(page==='confirm'&&token)(window as any).__confirmToken=token; if(page==='unlock'&&params.get('key'))(window as any).__unlockKeyId=params.get('key');
-  try { const r=await api('/api/auth/session'); user=r.user; render(page==='confirm'?'confirm':page==='unlock'?'unlock':'commands'); }
+  try { const r=await api('/api/auth/session'); user=r.user; render(...landing()); }
   catch { user=null; render('login'); }
 }
 boot();

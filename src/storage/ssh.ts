@@ -1,5 +1,7 @@
 import type { DatabaseSync } from 'node:sqlite';
 
+/** Encryption AAD binding a stored SSH private key to its owner and key ID. */
+export function sshKeyAad(userId:string,keyId:string):string{ return 'ssh-key:'+userId+':'+keyId; }
 export interface SshKeyRecord {
   id: string;
   userId: string;

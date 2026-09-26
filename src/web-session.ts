@@ -1,12 +1,14 @@
 import { randomToken } from './oauth/pkce.js';
 import type { WebSessionStore } from './storage/interface.js';
 
+export const WEB_SESSION_LIFETIME_MS=7*24*60*60_000;
+
 export class WebSessionService {
   constructor(private readonly store: WebSessionStore) {}
 
   create(userId:string): string {
     const token=randomToken();
-    this.store.saveWebSession({token,userId,expires:Date.now()+7*24*60*60_000});
+    this.store.saveWebSession({token,userId,expires:Date.now()+WEB_SESSION_LIFETIME_MS});
     return token;
   }
 
