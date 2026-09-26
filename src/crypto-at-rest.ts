@@ -4,7 +4,8 @@ const VERSION = 1;
 const NONCE_BYTES = 12;
 const KEY_BYTES = 32;
 
-function masterKey(): Buffer {
+/** The at-rest encryption key from FARCMD_ENCRYPTION_KEY; throws when it is missing or not 32 bytes. */
+export function masterKey(): Buffer {
   const raw = process.env.FARCMD_ENCRYPTION_KEY;
   if (!raw) throw new Error('FARCMD_ENCRYPTION_KEY is required');
   const key = Buffer.from(raw, 'base64');

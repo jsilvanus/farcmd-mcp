@@ -76,17 +76,18 @@ export class SqliteOAuthTokenStore {
     return token;
   }
   /** Look up without consuming (used to validate client, grant and user before rotation). */
+  private static rowToRefresh(r:any):StoredRefreshToken{ return {familyId:r.family_id,clientId:r.client_id,subject:r.subject,scope:r.scope,expires:r.expires,createdAt:r.created_at,...(r.used_at!=null?{usedAt:r.used_at}:{})}; }
   peekRefreshToken(token:string):StoredRefreshToken|undefined{
     const r=this.db.prepare('SELECT * FROM refresh_tokens WHERE token=?').get(hashToken(token)) as any;
     if(!r||r.expires<Date.now())return undefined;
-    return {familyId:r.family_id,clientId:r.client_id,subject:r.subject,scope:r.scope,expires:r.expires,createdAt:r.created_at,...(r.used_at!=null?{usedAt:r.used_at}:{})};
+    return SqliteOAuthTokenStore.rowToRefresh(r);
   }
   /** Consume the presented token and issue its successor, or revoke the family on reuse. */
   rotateRefreshToken(token:string):RefreshRotation{
     const key=hashToken(token);
     const r=this.db.prepare('SELECT * FROM refresh_tokens WHERE token=?').get(key) as any;
     if(!r)return {status:'unknown'};
-    const previous:StoredRefreshToken={familyId:r.family_id,clientId:r.client_id,subject:r.subject,scope:r.scope,expires:r.expires,createdAt:r.created_at,...(r.used_at!=null?{usedAt:r.used_at}:{})};
+    const previous=SqliteOAuthTokenStore.rowToRefresh(r);
     if(r.expires<Date.now())return {status:'expired'};
     const claimed=r.used_at==null&&Number(this.db.prepare('UPDATE refresh_tokens SET used_at=? WHERE token=? AND used_at IS NULL').run(Date.now(),key).changes)===1;
     if(!claimed)return {status:'reused',previous,revokedTokens:this.revokeFamily(previous.familyId)};
@@ -103,6 +104,11 @@ export class SqliteOAuthTokenStore {
   /** Single use: true only for the caller that removed it. */
   consumeLoginSession(token:string):boolean{ return Number(this.db.prepare('DELETE FROM oauth_login_sessions WHERE token=? AND expires>=?').run(hashToken(token),Date.now()).changes)===1; }
   revokeFamily(familyId:string):number{ return Number(this.db.prepare('DELETE FROM refresh_tokens WHERE family_id=? AND used_at IS NULL').run(familyId).changes); }
+  /** Revokes every refresh token and authorization code of a user; returns the number of refresh tokens removed. */
+  revokeForSubject(subject:string):number{
+    this.db.prepare('DELETE FROM authorization_codes WHERE subject=?').run(subject);
+    return Number(this.db.prepare('DELETE FROM refresh_tokens WHERE subject=?').run(subject).changes);
+  }
   revokeForGrant(subject:string,clientId:string):number{ return Number(this.db.prepare('DELETE FROM refresh_tokens WHERE subject=? AND client_id=?').run(subject,clientId).changes); }
   cleanup(now=Date.now()):void{
     this.db.prepare('DELETE FROM refresh_tokens WHERE expires<?').run(now);

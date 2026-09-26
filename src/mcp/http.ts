@@ -5,7 +5,7 @@ import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { createMcpServer } from './server.js';
 import type { FarcmdConnector } from '../connector.js';
-import { verifyBearerToken } from '../auth.js';
+import { verifyAccessToken } from '../oauth/jwt.js';
 import { deliverElicitationResponse, rememberClientCapabilities } from './elicitation.js';
 
 export interface McpHttpOptions {
@@ -30,7 +30,7 @@ export async function mountMcpHttp(app: FastifyInstance, options: McpHttpOptions
     if (!header?.startsWith('Bearer ')) return challenge();
     try {
       const token = header.slice('Bearer '.length);
-      const payload = await verifyBearerToken(token, options.jwtSecret, options.publicUrl, options.resource);
+      const { payload } = await verifyAccessToken(options.jwtSecret, options.publicUrl, options.resource, token);
       if (typeof payload.sub === 'string' && options.isUserActive && !options.isUserActive(payload.sub)) throw new Error('inactive user');
       authInfo = {
         token,
@@ -42,14 +42,14 @@ export async function mountMcpHttp(app: FastifyInstance, options: McpHttpOptions
       return challenge('invalid_token');
     }
 
-    const userId=typeof authInfo?.extra?.userId==='string'?authInfo.extra.userId:undefined;
+    const userId=typeof authInfo.extra?.userId==='string'?authInfo.extra.userId:undefined;
     const messages:any[]=Array.isArray(request.body)?request.body:[request.body];
     // Capabilities arrive only with initialize; later (stateless) requests look them up.
-    if(userId&&authInfo)for(const m of messages)if(m?.method==='initialize')rememberClientCapabilities(userId,authInfo.clientId,m.params?.capabilities);
+    if(userId)for(const m of messages)if(m?.method==='initialize')rememberClientCapabilities(userId,authInfo.clientId,m.params?.capabilities);
     // A client's answer to an elicitation farcmd sent on another request's stream (see elicitation.ts).
-    if(messages.length>0&&messages.every(m=>deliverElicitationResponse(m,userId,authInfo?.clientId)))return reply.code(202).send();
+    if(messages.length>0&&messages.every(m=>deliverElicitationResponse(m,userId,authInfo.clientId)))return reply.code(202).send();
 
-    const visibleLevels=authInfo&&typeof authInfo.extra?.userId==='string'?options.connector.visibleLevels({userId:authInfo.extra.userId,clientId:authInfo.clientId,accessToken:authInfo.token}):[];
+    const visibleLevels=userId?options.connector.visibleLevels({userId,clientId:authInfo.clientId,accessToken:authInfo.token}):[];
     const transport = new StreamableHTTPServerTransport({});
     const closed = new AbortController();
     const server = createMcpServer({connector:options.connector,publicUrl:options.publicUrl,visibleLevels,connectionSignal:closed.signal,
@@ -64,7 +64,7 @@ export async function mountMcpHttp(app: FastifyInstance, options: McpHttpOptions
     });
 
     const rawRequest = request.raw as IncomingMessage & { auth?: AuthInfo };
-    if (authInfo) rawRequest.auth = authInfo;
+    rawRequest.auth = authInfo;
     await transport.handleRequest(rawRequest, reply.raw, request.body);
   });
 

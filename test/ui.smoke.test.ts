@@ -10,6 +10,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomBytes } from 'node:crypto';
+import { createServer } from 'node:net';
 import Fastify from 'fastify';
 import cookie from '@fastify/cookie';
 import formbody from '@fastify/formbody';
@@ -27,10 +28,12 @@ const PASSWORD='correct horse battery staple';
 test('web UI: sign in, visit every page, toggle MCP access, sign out',{skip:!existsSync(join(WEB_ROOT,'index.html'))&&'dist/web missing: run npm run build'},async()=>{
   const dir=mkdtempSync(join(tmpdir(),'farcmd-ui-'));
   const store=new SqliteAuthStore(join(dir,'app.sqlite')); const db=store.getDatabase();
-  const app=Fastify(); await app.register(formbody); await app.register(cookie); await mountWebApi(app,new SqliteUserStore(db),store);
+  // The API's allowed Origin must be known when it is mounted, so reserve the port first.
+  const port=await new Promise<number>(resolve=>{const s=createServer();s.listen(0,'127.0.0.1',()=>{const p=(s.address() as any).port;s.close(()=>resolve(p));});});
+  const address='http://127.0.0.1:'+port;
+  const app=Fastify(); await app.register(formbody); await app.register(cookie); await mountWebApi(app,new SqliteUserStore(db),store,address);
   await app.register(fastifyStatic,{root:WEB_ROOT,prefix:'/'});
-  const address=await app.listen({host:'127.0.0.1',port:0});
-  const savedUrl=process.env.MCP_PUBLIC_URL; process.env.MCP_PUBLIC_URL=address; // the API's allowed Origin
+  await app.listen({host:'127.0.0.1',port});
   const user=await new UserAdmin(db).create({email:'ui@example.test',name:'UI',password:PASSWORD});
   const browser=await chromium.launch(process.env.FARCMD_CHROMIUM?{executablePath:process.env.FARCMD_CHROMIUM}:{});
   try{
@@ -100,7 +103,6 @@ test('web UI: sign in, visit every page, toggle MCP access, sign out',{skip:!exi
     assert.deepEqual(events.filter(e=>/^(auth|mcp_access|account)\./.test(e)),['auth.login:failure','auth.login:success','mcp_access.update:success','mcp_access.update:success','account.password_change:success','auth.logout:success']);
   }finally{
     await browser.close(); await app.close();
-    if(savedUrl===undefined)delete process.env.MCP_PUBLIC_URL; else process.env.MCP_PUBLIC_URL=savedUrl;
     rmSync(dir,{recursive:true,force:true});
   }
 });
