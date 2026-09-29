@@ -1,12 +1,12 @@
 import type { SqliteOAuthTokenStore } from '../oauth/tokens.js';
-export interface OAuthGrantLike { userId:string; clientId:string; clientName:string; visibleLevels:(1|2|3|4|5)[]; level5PermanentlyHidden:boolean; revokedAt?:number; lastUsedAt?:number; }
+export interface OAuthGrantLike { userId:string; clientId:string; clientName:string; visibleLevels:(1|2|3|4|5)[]; level5PermanentlyHidden:boolean; allowSuggestions:boolean; revokedAt?:number; lastUsedAt?:number; }
 export interface AuthStore {
   /** Authorization codes and rotating refresh tokens (stored hashed). */
   oauthTokens():SqliteOAuthTokenStore;
   getOAuthGrant(userId:string,clientId:string):OAuthGrantLike|undefined;
-  upsertOAuthGrant(userId:string,clientId:string,clientName:string,visibleLevels:number[],level5PermanentlyHidden:boolean):void;
+  upsertOAuthGrant(userId:string,clientId:string,clientName:string,visibleLevels:number[],level5PermanentlyHidden:boolean,allowSuggestions?:boolean):void;
   revokeOAuthGrant(userId:string,clientId:string):void;
-  updateOAuthGrant(userId:string,clientId:string,visibleLevels:number[],level5PermanentlyHidden:boolean):void;
+  updateOAuthGrant(userId:string,clientId:string,visibleLevels:number[],level5PermanentlyHidden:boolean,allowSuggestions?:boolean):void;
   listOAuthGrants(userId:string):OAuthGrantLike[];
   touchOAuthGrant(userId:string,clientId:string):void;
   recordSecurityEvent?(userId:string|undefined,clientId:string|undefined,event:string,details?:Record<string,unknown>,outcome?:'success'|'failure'):void;

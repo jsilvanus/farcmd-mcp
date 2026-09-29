@@ -278,7 +278,9 @@ test('MCP discovery exposes command metadata only: no content, keys, verifier or
     const { createMcpServer }=await import('../src/mcp/server.js');
     const server=createMcpServer({connector:new FarcmdConnectorImpl(f.db,'http://localhost:5999'),publicUrl:'http://localhost:5999',visibleLevels:[1,2,3,4,5]});
     const tools=Object.keys((server as any)._registeredTools).sort();
-    assert.deepEqual(tools,['command_level_1','command_level_2','command_level_3','command_level_4','command_level_5','farcmd_health','list_commands']);
+    assert.deepEqual(tools,['command_level_1','command_level_2','command_level_3','command_level_4','command_level_5','farcmd_health','list_commands'],'suggestion tools only where the OAuth source allows them');
+    const withSuggestions=createMcpServer({connector:new FarcmdConnectorImpl(f.db,'http://localhost:5999'),publicUrl:'http://localhost:5999',visibleLevels:[],suggestionsAllowed:true});
+    assert.deepEqual(Object.keys((withSuggestions as any)._registeredTools).sort(),['farcmd_health','list_command_suggestions','list_commands','suggest_command'],'suggesting never adds a way to create, install, enable or run');
   } finally { cleanup(f); }
 });
 

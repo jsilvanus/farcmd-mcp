@@ -7,6 +7,7 @@ import { SqliteOAuthGrantStore } from '../oauth/grants.js';
 import { AuditLog, migrateAuditTable, type AuditOutcome } from '../audit.js';
 import { SqliteOAuthTokenStore, hashToken, migrateOAuthTokenTables } from '../oauth/tokens.js';
 import { migrateMcpAccess } from '../mcp-access.js';
+import { migrateCommandSuggestions } from './command-suggestions.js';
 import { hashCommandContent } from '../command-registry.js';
 
 /** Schema upgrade for older databases: adds each column unless it already exists. */
@@ -45,9 +46,12 @@ export class SqliteAuthStore implements AuthStore, WebSessionStore {
     try{this.db.exec("UPDATE command_installations SET remote_script_path='legacy',authorized_key_line=public_key WHERE remote_script_path='' AND authorized_key_line=''");}catch{}
     addColumns(this.db,'pending_executions',['exit_code INTEGER','stdout TEXT','stderr TEXT','duration_ms INTEGER','signal TEXT']);
     addColumns(this.db,'oauth_grants',["visible_levels TEXT NOT NULL DEFAULT ''",'level5_permanently_hidden INTEGER NOT NULL DEFAULT 0']);
+    // Command suggestions (suggest_command) are opt-in per OAuth source; existing sources start with them off.
+    addColumns(this.db,'oauth_grants',['allow_suggestions INTEGER NOT NULL DEFAULT 0']);
     migrateAuditTable(this.db);
     migrateOAuthTokenTables(this.db);
     migrateMcpAccess(this.db);
+    migrateCommandSuggestions(this.db);
     addColumns(this.db,'users',['disabled_at INTEGER']);
     // Web session tokens are stored as SHA-256 hashes (64 hex chars), like OAuth tokens: a database copy yields no usable sessions.
     try{const legacy=this.db.prepare('SELECT token FROM web_sessions WHERE length(token)<>64').all() as {token:string}[];const update=this.db.prepare('UPDATE web_sessions SET token=? WHERE token=?');for(const row of legacy)update.run(hashToken(row.token),row.token);this.db.prepare('DELETE FROM web_sessions WHERE expires<?').run(Date.now());}catch{}
@@ -60,9 +64,9 @@ export class SqliteAuthStore implements AuthStore, WebSessionStore {
   cleanupSecurityEvents(maxAgeMs=90*24*60*60_000):number{return new AuditLog(this.db).prune(maxAgeMs);}
   private grants(){return new SqliteOAuthGrantStore(this.db);}
   getOAuthGrant(u:string,c:string){return this.grants().get(u,c);}
-  upsertOAuthGrant(u:string,c:string,n:string,l:number[],p:boolean){this.grants().upsert(u,c,n,l as any,p);}
+  upsertOAuthGrant(u:string,c:string,n:string,l:number[],p:boolean,s?:boolean){this.grants().upsert(u,c,n,l as any,p,s);}
   revokeOAuthGrant(u:string,c:string){this.grants().revoke(u,c);}
-  updateOAuthGrant(u:string,c:string,l:number[],p:boolean){this.grants().update(u,c,l as any,p);}
+  updateOAuthGrant(u:string,c:string,l:number[],p:boolean,s?:boolean){this.grants().update(u,c,l as any,p,s);}
   listOAuthGrants(u:string){return this.grants().list(u);}
   touchOAuthGrant(u:string,c:string){this.grants().touch(u,c);}
   oauthTokens():SqliteOAuthTokenStore{return new SqliteOAuthTokenStore(this.db);}

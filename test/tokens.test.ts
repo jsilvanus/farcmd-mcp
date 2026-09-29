@@ -144,6 +144,21 @@ test('authorization flow: sign-in session is kept in SQLite, survives a restart 
     assert.equal(again.statusCode,400,'the sign-in session is single use');
     const token=await app2.inject({method:'POST',url:'/oauth/token',payload:{grant_type:'authorization_code',code:location.searchParams.get('code')!,code_verifier:verifier,client_id:client,redirect_uri:redirect}});
     assert.equal(token.statusCode,200,token.body);
+    // Command suggestions are opt-in per OAuth source: unticked on the consent page and off unless ticked.
+    assert.match(signIn.body,/<input type="checkbox" name="allowSuggestions" value="yes">/,'offered, not preselected');
+    const grants=new SqliteOAuthGrantStore(restarted.getDatabase());
+    const ownerId=(f.db.prepare("SELECT id FROM users WHERE email='o@example.test'").get() as any).id;
+    assert.equal(grants.get(ownerId,client)?.allowSuggestions,false);
+    const signInAgain=await app2.inject({method:'POST',url:'/oauth/authorize',payload:{oauth,email:'o@example.test',password}});
+    const session2=/name="session" value="([^"]+)"/.exec(signInAgain.body)![1]!;
+    assert.equal((await app2.inject({method:'POST',url:'/oauth/authorize',payload:{session:session2,action:'approve',level:'1',allowSuggestions:'yes'}})).statusCode,302);
+    assert.equal(grants.get(ownerId,client)?.allowSuggestions,true);
+    const signInThird=await app2.inject({method:'POST',url:'/oauth/authorize',payload:{oauth,email:'o@example.test',password}});
+    assert.match(signInThird.body,/name="allowSuggestions" value="yes" checked>/,'the current choice is preselected when authorizing again');
+    const audited=f.db.prepare("SELECT details FROM security_events WHERE event='oauth.authorize' ORDER BY seq DESC").get() as any;
+    assert.match(audited.details,/"allowSuggestions":true/);
+    const session3=/name="session" value="([^"]+)"/.exec(signInThird.body)![1]!;
+    assert.equal((await app2.inject({method:'POST',url:'/oauth/authorize',payload:{session:session3,action:'deny'}})).statusCode,302,'closes the third sign-in session');
     // Expired sessions are refused and purged.
     f.tokens.saveLoginSession('old',{userId:f.userId,oauth,expires:Date.now()-1});
     assert.equal(f.tokens.getLoginSession('old'),undefined); f.tokens.cleanup();

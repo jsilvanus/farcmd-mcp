@@ -1,4 +1,5 @@
 import './style.css';
+import { securityReviewPrompt } from './review-prompt.js';
 
 type User = { id:string; name:string; email?:string; createdAt:number };
 
@@ -27,10 +28,10 @@ function shell(title:string, body:string) {
   document.querySelector('#logout')?.addEventListener('click', async () => { await api('/api/auth/logout',{method:'POST'}); user=null; render('login'); });
 }
 
-/** The page a ?page=confirm&token= or ?page=unlock&key= link asks for, else Commands. */
+/** The page a ?page=confirm&token=, ?page=unlock&key= or ?page=suggestion&id= link asks for, else Commands. */
 function landing():[string,string?] {
-  const params=new URLSearchParams(location.search); const token=params.get('token'); const key=params.get('key');
-  return params.get('page')==='confirm'&&token?['confirm',token]:params.get('page')==='unlock'&&key?['unlock',key]:['commands'];
+  const params=new URLSearchParams(location.search); const token=params.get('token'); const key=params.get('key'); const id=params.get('id');
+  return params.get('page')==='confirm'&&token?['confirm',token]:params.get('page')==='unlock'&&key?['unlock',key]:params.get('page')==='suggestion'&&id?['suggestion',id]:['commands'];
 }
 
 function render(page='commands', arg?:string) {
@@ -52,6 +53,7 @@ function render(page='commands', arg?:string) {
   else if (page==='audit') auditPage();
   else if (page==='ssh') sshPage();
   else if (page==='commands') commandsPage();
+  else if (page==='suggestion') commandsPage(arg);
   else if (page==='unlock') unlockPage(arg!); else if (page==='confirm') confirmPage(arg!);
   else commandsPage();
 }
@@ -243,9 +245,10 @@ function unlockPage(keyId:string) {
   shell('Unlock SSH key','<p>The passphrase is used only in memory and is not stored in the database.</p><form id="unlock-form"><label>Passphrase<input name="passphrase" type="password" autocomplete="current-password" required></label><button>Unlock for 15 minutes</button></form><p id="unlock-error"></p>');
   document.querySelector<HTMLFormElement>('#unlock-form')!.onsubmit=async e=>{e.preventDefault();try{const f=new FormData(e.currentTarget as HTMLFormElement);await api('/api/ssh/keys/'+keyId+'/unlock',{method:'POST',body:JSON.stringify({passphrase:f.get('passphrase')})});render('ssh');}catch(err){document.querySelector('#unlock-error')!.textContent=(err as Error).message;}};
 }
-async function commandsPage(){
-  const [cr,tr]=await Promise.all([api('/api/commands'),api('/api/ssh/targets')]);
-  const cs=cr.commands as any[],ts=tr.targets as any[];
+/** reviewSuggestionId: opened from a suggestion's review link (?page=suggestion&id=). */
+async function commandsPage(reviewSuggestionId?:string){
+  const [cr,tr,sr]=await Promise.all([api('/api/commands'),api('/api/ssh/targets'),api('/api/command-suggestions')]);
+  const cs=cr.commands as any[],ts=tr.targets as any[],ss=sr.suggestions as any[];
   const targetName=(id:string)=>ts.find(t=>t.id===id)?.name??'unknown target';
   const commandRows=cs.map(c=>row(
     '<strong>'+escapeHtml(c.name)+'</strong>'+(c.description?'<small>'+escapeHtml(c.description)+'</small>':'')+
@@ -262,7 +265,15 @@ async function commandsPage(){
       (c.level===5?'<button class="small" data-set-level5="'+c.id+'">Password</button>':'')+
       '<button class="small" data-toggle-command="'+c.id+'">'+(c.enabled?'Disable':'Enable')+'</button><button class="small danger" data-delete-command="'+c.id+'">Delete</button>'+
     '</div></div>'));
+  // Suggestions are inert until the person creates a command from one; MCP clients cannot create, install or enable commands.
+  const suggestionRows=ss.map(s=>row(
+    '<strong>'+escapeHtml(s.name)+'</strong>'+(s.description?'<small>'+escapeHtml(s.description)+'</small>':'')+
+    '<div class="pills">'+pill('Level '+s.level+' · '+LEVELS[s.level],s.level>=5?'bad':s.level>=4?'warn':'muted')+pill(s.type==='bash_script'?'Bash script':'Shell')+pill('From '+s.clientName)+pill(new Date(s.createdAt).toLocaleString())+'</div>',
+    '<button class="small" data-copy-suggestion="'+escapeHtml(s.id)+'" title="Copies the suggestion with a security-review prompt, to paste into another AI agent">Copy for review</button><button class="small primary" data-review-suggestion="'+escapeHtml(s.id)+'"'+(ts.length?'':' disabled title="Add an SSH target first"')+'>Review</button><button class="small danger" data-dismiss-suggestion="'+escapeHtml(s.id)+'">Dismiss</button>'));
   shell('Commands','<div id="mcp-access"></div>'+
+    (ss.length?'<article>'+sectionHead('Suggested by MCP clients ('+ss.length+')','')+
+      '<p class="hint">An AI client proposed these commands. Nothing has been created: review one to create it as a command (then Install and Run as usual), or dismiss it.</p>'+
+      rows(suggestionRows,'')+'</article>':'')+
     '<article>'+sectionHead('Command registry','<button class="small primary" id="new-command"'+(ts.length?'':' disabled title="Add an SSH target first"')+'>New command</button>')+
     '<p class="hint">A command is an MCP capability. Install creates a dedicated SSH key on the target that can only run this command’s farcmd-managed script.</p>'+
     rows(commandRows,ts.length?'No commands yet.':'Add an SSH target before creating commands.')+'</article>');
@@ -281,7 +292,7 @@ async function commandsPage(){
       '<label>Type<select name="type"'+dis+'><option value="shell">Shell command</option><option value="bash_script"'+(c?.type==='bash_script'?' selected':'')+'>Bash script</option></select></label></div>'+
       '<label>Content<textarea name="content" rows="8" required spellcheck="false" class="mono" placeholder="Shell command or Bash script"'+dis+'>'+escapeHtml(c?.content??'')+'</textarea></label>'+
       '<label>Level<select name="level">'+[1,2,3,4,5].map(l=>'<option value="'+l+'"'+(l===(c?.level??1)?' selected':'')+'>'+l+' — '+LEVELS[l]+'</option>').join('')+'</select></label>'+
-      (c?.level===5?'<p class="hint">Moving this command off level 5 clears its execution password.</p>':'')+
+      (c?.id&&c.level===5?'<p class="hint">Moving this command off level 5 clears its execution password.</p>':'')+
       '<label class="check"><input type="checkbox" name="verifyIntegrity"'+(c?.verifyIntegrity||(c?.level??1)>=3?' checked':'')+((c?.level??1)>=3?' disabled':'')+'> Verify integrity before each run</label><p class="hint" data-verify-hint>'+verifyHint(c?.level??1)+'</p>'+
       '<label class="check"><input type="checkbox" name="showOutputOnApproval"'+(c?.showOutputOnApproval?' checked':'')+'> Show output after approval (levels 4–5)</label><p class="hint">Levels 1–3 always show their output when run from here. For levels 4–5, the approval page and Run show only the exit code unless this is on. The MCP client always gets the full result.</p>';};
   const commandBody=(form:HTMLFormElement)=>{const f=new FormData(form); const body:Record<string,unknown>={name:f.get('name'),description:f.get('description'),level:Number(f.get('level')),showOutputOnApproval:f.get('showOutputOnApproval')==='on'};
@@ -291,6 +302,22 @@ async function commandsPage(){
   mcpAccessPanel();
   on('#new-command',()=>wireVerify(formDialog('New command',commandFields(),'Create command',async form=>{
     await api('/api/commands',{method:'POST',body:JSON.stringify(commandBody(form))}); commandsPage();})));
+  const reviewSuggestion=(s:any)=>{
+    const prefill={name:s.name,description:s.description,type:s.type,content:s.content,level:s.level}; // no id: a new command
+    const intro='<div class="suggestion-note"><p><strong>Written by an MCP client ('+escapeHtml(s.clientName)+').</strong> Read the content line by line before creating it: it runs on the target exactly as written. Choose the target and level yourself.</p>'+
+      (s.rationale?'<p><small>Why: '+escapeHtml(s.rationale)+'</small></p>':'')+(s.targetHint?'<p><small>Meant for: '+escapeHtml(s.targetHint)+'</small></p>':'')+
+      '<p><button type="button" class="small" data-copy-review>Copy for review</button> <small>Copies it with a security-review prompt: paste that into another AI agent to check what it does and whether it hides anything malicious.</small></p></div>';
+    const dialog=formDialog('Review suggested command',intro+commandFields(prefill)+
+      '<label class="check"><input type="checkbox" name="reviewed" required> I have reviewed the content and chosen the target and level.</label>','Create command',async form=>{
+      await api('/api/commands',{method:'POST',body:JSON.stringify({...commandBody(form),suggestionId:s.id})}); window.history.replaceState(null,'',location.pathname); commandsPage();});
+    wireVerify(dialog,prefill);
+    dialog.querySelector<HTMLButtonElement>('[data-copy-review]')!.onclick=e=>copyForReview(e.currentTarget as HTMLButtonElement,s,true);};
+  on('[data-review-suggestion]',b=>{const s=ss.find(x=>x.id===b.dataset.reviewSuggestion); if(s)reviewSuggestion(s);});
+  on('[data-copy-suggestion]',b=>{const s=ss.find(x=>x.id===b.dataset.copySuggestion); if(s)copyForReview(b as HTMLButtonElement,s,false);});
+  on('[data-dismiss-suggestion]',async b=>{if(!confirm('Dismiss this suggestion? The MCP client will see it as dismissed.'))return;
+    try{await api('/api/command-suggestions/'+b.dataset.dismissSuggestion+'/dismiss',{method:'POST',body:'{}'}); commandsPage();}catch(err){alert((err as Error).message);}});
+  if(reviewSuggestionId){const s=ss.find(x=>x.id===reviewSuggestionId);
+    if(!s)alert('This suggestion was already reviewed, or it does not exist.'); else if(!ts.length)alert('Add an SSH target before creating commands.'); else reviewSuggestion(s);}
   on('[data-edit-command]',b=>{const c=cs.find(x=>x.id===b.dataset.editCommand); if(!c)return;
     wireVerify(formDialog(c.commandKey?'Edit command (installed)':'Edit command',commandFields(c),'Save',async form=>{await api('/api/commands/'+c.id,{method:'PATCH',body:JSON.stringify(commandBody(form))}); commandsPage();}),c);});
   on('[data-run-command]',b=>{const c=cs.find(x=>x.id===b.dataset.runCommand); if(c)runCommand({...c,targetName:targetName(c.targetId)});});
@@ -312,11 +339,12 @@ async function oauthPage(){
   const levelBoxes=(g:any)=>[1,2,3,4,5].map(l=>'<label class="check"><input type="checkbox" name="level" value="'+l+'"'+(g.visibleLevels.includes(l)?' checked':'')+(l===5&&g.level5PermanentlyHidden?' disabled':'')+'><span>Level '+l+' · '+escapeHtml(LEVELS[l]!)+'</span></label>').join('');
   const grantRow=(g:any)=>'<li class="grant">'+
     '<div class="row-main"><strong>'+escapeHtml(g.clientName||g.clientId)+'</strong><small class="mono">'+escapeHtml(g.clientId)+'</small><div class="pills">'+
-      (g.revoked?pill('Revoked','bad'):pill('Active','ok'))+pill(g.lastUsedAt?'Last used '+new Date(g.lastUsedAt).toLocaleString():'Not used yet')+(g.level5PermanentlyHidden?pill('Level 5 permanently hidden','warn'):'')+'</div></div>'+
+      (g.revoked?pill('Revoked','bad'):pill('Active','ok'))+pill(g.lastUsedAt?'Last used '+new Date(g.lastUsedAt).toLocaleString():'Not used yet')+(g.level5PermanentlyHidden?pill('Level 5 permanently hidden','warn'):'')+(g.allowSuggestions?pill('Suggestions allowed'):'')+'</div></div>'+
     (g.revoked?'<p class="hint">This client was revoked. It has to be authorized again before it can use farcmd.</p>'
       :'<form data-oauth-form="'+escapeHtml(g.clientId)+'"><fieldset class="level-grid"><legend>Levels this client can see</legend>'+levelBoxes(g)+'</fieldset>'+
         '<label class="check"><input type="checkbox" name="permanentLevel5"'+(g.level5PermanentlyHidden?' checked disabled':'')+'><span>Permanently hide level 5 from this client (cannot be undone)</span></label>'+
-        '<div class="grant-actions"><button class="small primary" type="submit">Save levels</button><button class="small danger" type="button" data-revoke-oauth="'+escapeHtml(g.clientId)+'">Revoke</button><span class="form-message" role="status"></span></div></form>')+
+        '<label class="check"><input type="checkbox" name="allowSuggestions"'+(g.allowSuggestions?' checked':'')+'><span>Allow suggestions: the client may propose new commands, which you review on the Commands page. It cannot create, install, enable or run them.</span></label>'+
+        '<div class="grant-actions"><button class="small primary" type="submit">Save</button><button class="small danger" type="button" data-revoke-oauth="'+escapeHtml(g.clientId)+'">Revoke</button><span class="form-message" role="status"></span></div></form>')+
     '</li>';
   shell('OAuth Sources','<div id="mcp-access"></div><article>'+sectionHead('Authorized MCP clients','')+
     '<p class="hint">Each client sees only the command levels ticked here. Whether it asks before a call is the client\'s own setting; levels 4 and 5 always need your approval in farcmd as well.</p>'+
@@ -326,7 +354,7 @@ async function oauthPage(){
     permanent.addEventListener('change',()=>{if(permanent.checked){level5.checked=false;}level5.disabled=permanent.checked;});
     f.onsubmit=async e=>{e.preventDefault();const message=f.querySelector('.form-message')!;const levels=[...f.querySelectorAll<HTMLInputElement>('input[name="level"]:checked')].map(x=>Number(x.value));
       if(permanent.checked&&!permanent.disabled&&!confirm('Permanently hide level 5 from this client? This cannot be undone.'))return;
-      try{await api('/api/oauth/grants/'+encodeURIComponent(f.dataset.oauthForm!),{method:'PATCH',body:JSON.stringify({visibleLevels:levels,level5PermanentlyHidden:permanent.checked})});oauthPage();}catch(err){message.textContent=(err as Error).message;}};
+      try{await api('/api/oauth/grants/'+encodeURIComponent(f.dataset.oauthForm!),{method:'PATCH',body:JSON.stringify({visibleLevels:levels,level5PermanentlyHidden:permanent.checked,allowSuggestions:f.querySelector<HTMLInputElement>('input[name="allowSuggestions"]')!.checked})});oauthPage();}catch(err){message.textContent=(err as Error).message;}};
   });
   document.querySelectorAll<HTMLElement>('[data-revoke-oauth]').forEach(b=>b.onclick=async()=>{if(confirm('Revoke this client? It loses access at once and has to be authorized again.')){await api('/api/oauth/grants/'+encodeURIComponent(b.dataset.revokeOauth!)+'/revoke',{method:'POST'});oauthPage();}});
   mcpAccessPanel();
@@ -394,6 +422,18 @@ function resultView(r:any):string{
   return '<div class="pills">'+status+pill((r.durationMs/1000).toFixed(r.durationMs<10_000?2:1)+' s')+(r.truncated?pill('Output truncated','warn'):'')+'</div>'+
     (r.outputHidden?'<p class="hint">Output is not shown after approval for this command (see “Show output after approval” in its settings). It is still recorded in History.</p>'
       :block('stdout',r.stdout??'','stdout')+(r.stderr?block('stderr',r.stderr,'stderr'):''));
+}
+/**
+ * Copies a suggestion with a security-review prompt (review-prompt.ts) for another AI agent. Where the clipboard
+ * is unavailable (e.g. plain HTTP), the text is shown to copy by hand: inline in the review dialog, else in a dialog.
+ */
+async function copyForReview(button:HTMLButtonElement,s:any,inline:boolean){
+  const text=securityReviewPrompt(s);
+  try{await navigator.clipboard.writeText(text);button.textContent='Copied';return;}catch{}
+  const box='<textarea class="mono review-copy" rows="10" readonly aria-label="Text to copy for review">'+escapeHtml(text)+'</textarea>';
+  if(inline){button.closest('p')!.insertAdjacentHTML('afterend','<p class="hint">Select all and copy:</p>'+box);}
+  else openDialog('Copy for review','<p class="hint">Copy this text and paste it into another AI agent.</p>'+box+'<div class="dialog-actions"><button data-dialog-close>Close</button></div>');
+  document.querySelector<HTMLTextAreaElement>('textarea.review-copy')?.select();
 }
 function bindCopyButtons(root:ParentNode){root.querySelectorAll<HTMLButtonElement>('[data-copy-output]').forEach(b=>b.onclick=async()=>{const text=b.closest('.output-block')?.querySelector('pre')?.textContent??'';try{await navigator.clipboard.writeText(text);b.textContent='Copied';}catch{b.textContent='Copy failed';}});}
 function resultDialog(c:any,r:any){const d=openDialog(c.name,resultView(r)+'<div class="dialog-actions"><button data-dialog-close>Close</button></div>');d.classList.add('wide');bindCopyButtons(d);}
