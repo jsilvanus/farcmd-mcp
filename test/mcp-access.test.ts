@@ -55,7 +55,7 @@ async function fixture(){
   const ctx={userId:user.id,clientId:CLIENT,accessToken:token};
   return {dir,db,app,admin,user,connector,l1,l4,tools,rpc,call,setOwn,getOwn,webCookie,ctx,done:()=>rmSync(dir,{recursive:true,force:true})};
 }
-const ALL_TOOLS=['command_level_1','command_level_4','farcmd_health','list_command_suggestions','list_commands','suggest_command'];
+const ALL_TOOLS=['command_level_1','command_level_4','farcmd_health','list_commands'];
 
 test('each switch (user, administrator per user, global) refuses every MCP path; the web UI keeps working',async()=>{
   const f=await fixture();
@@ -70,8 +70,8 @@ test('each switch (user, administrator per user, global) refuses every MCP path;
     for(const [name,off,on,message] of cases){
       await off();
       // The still-valid access token is accepted, but no execution tool is exposed and every tool refuses.
-      assert.deepEqual(await f.tools(),['farcmd_health','list_command_suggestions','list_commands','suggest_command'],name+': execution tools hidden');
-      for(const [tool,args] of [['farcmd_health',{}],['list_commands',{}],['list_command_suggestions',{}],['suggest_command',{name:'x',content:'uptime',level:1}]] as const){const r=await f.call(tool,args);assert.equal(r.error,true,name+' '+tool);assert.match(r.text,message);}
+      assert.deepEqual(await f.tools(),['farcmd_health','list_commands'],name+': execution tools hidden');
+      for(const [tool,args] of [['farcmd_health',{}],['list_commands',{}]] as const){const r=await f.call(tool,args);assert.equal(r.error,true,name+' '+tool);assert.match(r.text,message);}
       await assert.rejects(f.connector.executeCommand(f.ctx,f.l1,1),message,name+': execution refused even if a client calls a tool it saw before');
       await assert.rejects(f.connector.executeCommand(f.ctx,f.l4,4),message,name+': no confirmation request is created');
       assert.equal((f.db.prepare('SELECT COUNT(*) AS n FROM pending_executions').get() as any).n,0);

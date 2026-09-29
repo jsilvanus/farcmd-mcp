@@ -22,7 +22,7 @@ import { MAX_PENDING_SUGGESTIONS } from '../src/storage/command-suggestions.js';
 process.env.FARCMD_ENCRYPTION_KEY??=randomBytes(32).toString('base64');
 const PASSWORD='correct horse battery staple';
 const ISSUER='http://localhost:5999'; const RESOURCE=ISSUER+'/mcp'; const JWT=randomBytes(32);
-const CLIENT='https://client.example/c.json', OTHER_CLIENT='https://other.example/c.json';
+const CLIENT='https://client.example/c.json', OTHER_CLIENT='https://other.example/c.json', THIRD_CLIENT='https://third.example/c.json';
 
 let fixtureCount=0;
 async function fixture(){
@@ -35,12 +35,14 @@ async function fixture(){
   const user=await admin.create({email:'s@example.test',name:'Es',password:PASSWORD});
   const other=await admin.create({email:'o@example.test',name:'Oh',password:PASSWORD});
   const grants=new SqliteOAuthGrantStore(db);
-  grants.upsert(user.id,CLIENT,'Claude',[1],false); grants.upsert(user.id,OTHER_CLIENT,'Other',[1],false);
+  // Both sources allow suggestions (opt-in per source); THIRD_CLIENT keeps the default: off.
+  grants.upsert(user.id,CLIENT,'Claude',[1],false,true); grants.upsert(user.id,OTHER_CLIENT,'Other',[1],false,true); grants.upsert(user.id,THIRD_CLIENT,'Third',[1],false);
   // A target that is never contacted: suggestions and command creation touch no machine.
   const keyId=randomUUID(), targetId=randomUUID(), now=Date.now();
   db.prepare('INSERT INTO ssh_keys (id,user_id,name,encrypted_private_key,created_at,updated_at) VALUES (?,?,?,?,?,?)').run(keyId,user.id,'key','1.x.x',now,now);
   db.prepare('INSERT INTO ssh_targets (id,user_id,name,hostname,port,username,ssh_key_id,host_fingerprint,enabled,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)').run(targetId,user.id,'dev','localhost',22,'deploy',keyId,'sha256:abc',1,now,now);
-  const tokens={[CLIENT]:await issueAccessToken(JWT,ISSUER,RESOURCE,user.id,CLIENT,'mcp'),[OTHER_CLIENT]:await issueAccessToken(JWT,ISSUER,RESOURCE,user.id,OTHER_CLIENT,'mcp')};
+  const tokens:Record<string,string>={}; for(const c of [CLIENT,OTHER_CLIENT,THIRD_CLIENT])tokens[c]=await issueAccessToken(JWT,ISSUER,RESOURCE,user.id,c,'mcp');
+  const tools=async(client:string)=>{const r=await app.inject({method:'POST',url:'/mcp',headers:{authorization:'Bearer '+tokens[client],accept:'application/json, text/event-stream','content-type':'application/json'},payload:{jsonrpc:'2.0',id:1,method:'tools/list',params:{}}});const line=String(r.body).split('\n').find(l=>l.startsWith('data: '));return (JSON.parse(line?line.slice(6):r.body).result.tools as any[]).map(t=>t.name).sort();};
   const call=async(name:string,args:Record<string,unknown>={},client=CLIENT)=>{
     const r=await app.inject({method:'POST',url:'/mcp',headers:{authorization:'Bearer '+tokens[client],accept:'application/json, text/event-stream','content-type':'application/json'},payload:{jsonrpc:'2.0',id:1,method:'tools/call',params:{name,arguments:args}}});
     const line=String(r.body).split('\n').find(l=>l.startsWith('data: ')); const result=JSON.parse(line?line.slice(6):r.body).result;
@@ -50,9 +52,9 @@ async function fixture(){
   const remoteAddress='10.0.'+(fixtureCount>>8&255)+'.'+(++fixtureCount&255);
   const login=async(email:string)=>{const r=await app.inject({method:'POST',url:'/api/auth/login',remoteAddress,payload:{email,password:PASSWORD}});const c=r.cookies.find((x:any)=>x.name==='farcmd_session')!;return 'farcmd_session='+c.value;};
   const webCookie=await login('s@example.test'); const otherCookie=await login('o@example.test');
-  const web=(method:'GET'|'POST',url:string,payload?:unknown,cookieHeader=webCookie,headers:Record<string,string>={})=>app.inject({method,url,headers:{cookie:cookieHeader,origin:ISSUER,...headers},...(payload!==undefined?{payload:payload as any}:{})});
+  const web=(method:'GET'|'POST'|'PATCH',url:string,payload?:unknown,cookieHeader=webCookie,headers:Record<string,string>={})=>app.inject({method,url,headers:{cookie:cookieHeader,origin:ISSUER,...headers},...(payload!==undefined?{payload:payload as any}:{})});
   const count=(table:string)=>(db.prepare('SELECT COUNT(*) AS n FROM '+table).get() as {n:number}).n;
-  return {dir,db,app,user,other,grants,targetId,call,web,otherCookie,count,done:()=>rmSync(dir,{recursive:true,force:true})};
+  return {dir,db,app,user,other,grants,targetId,call,tools,web,otherCookie,count,connector,done:()=>rmSync(dir,{recursive:true,force:true})};
 }
 const SUGGESTION={name:'saarnavideo: redeploy',description:'Pull, build, migrate and restart saarnavideo.',content:'/opt/server-commands/saarnavideo-redeploy.sh',level:3,targetHint:'dev server',rationale:'The person wants to redeploy from chat.'};
 
@@ -138,5 +140,33 @@ test('dismissing a suggestion: once, only by its owner, and only with the CSRF h
     assert.equal(f.count('commands'),0);
     assert.equal((await f.call('list_command_suggestions')).data.suggestions[0].status,'dismissed');
     assert.equal((f.db.prepare("SELECT COUNT(*) AS n FROM security_events WHERE event='command_suggestion.dismiss' AND outcome='success'").get() as any).n,1);
+  }finally{f.done();}
+});
+
+test('suggestions are off unless the OAuth source allows them; the person switches them on in the web UI',async()=>{
+  const f=await fixture();
+  try{
+    const SUGGEST_TOOLS=['list_command_suggestions','suggest_command'];
+    assert.deepEqual((await f.tools(THIRD_CLIENT)).filter(t=>SUGGEST_TOOLS.includes(t)),[],'not listed by default');
+    assert.deepEqual((await f.tools(CLIENT)).filter(t=>SUGGEST_TOOLS.includes(t)),SUGGEST_TOOLS,'listed where allowed');
+    const ctx={userId:f.user.id,clientId:THIRD_CLIENT,accessToken:'t'};
+    // A client that calls the tool anyway (it saw it earlier, or guesses the name) is refused.
+    assert.equal((await f.call('suggest_command',SUGGESTION,THIRD_CLIENT)).error,true);
+    await assert.rejects(f.connector.suggestCommand(ctx,{...SUGGESTION,type:'shell',level:3} as any),/not allowed for this OAuth source.*OAuth Sources page/);
+    await assert.rejects(f.connector.listSuggestions(ctx),/not allowed for this OAuth source/);
+    assert.equal(f.count('command_suggestions'),0);
+    // The OAuth Sources page saves levels and the switch together; leaving allowSuggestions out keeps it as is.
+    assert.equal((await f.web('PATCH','/api/oauth/grants/'+encodeURIComponent(THIRD_CLIENT),{visibleLevels:[1],level5PermanentlyHidden:false,allowSuggestions:true})).statusCode,200);
+    assert.equal(f.grants.get(f.user.id,THIRD_CLIENT)?.allowSuggestions,true);
+    assert.equal((await f.web('PATCH','/api/oauth/grants/'+encodeURIComponent(THIRD_CLIENT),{visibleLevels:[1,2],level5PermanentlyHidden:false})).statusCode,200);
+    assert.equal(f.grants.get(f.user.id,THIRD_CLIENT)?.allowSuggestions,true,'unchanged when not sent');
+    assert.deepEqual((await f.tools(THIRD_CLIENT)).filter(t=>SUGGEST_TOOLS.includes(t)),SUGGEST_TOOLS,'listed from the next request on');
+    assert.equal((await f.call('suggest_command',SUGGESTION,THIRD_CLIENT)).error,false);
+    // Switching it off hides the tools again; suggestions already made stay for review.
+    await f.web('PATCH','/api/oauth/grants/'+encodeURIComponent(THIRD_CLIENT),{visibleLevels:[1,2],level5PermanentlyHidden:false,allowSuggestions:false});
+    assert.deepEqual((await f.tools(THIRD_CLIENT)).filter(t=>SUGGEST_TOOLS.includes(t)),[]);
+    assert.equal((await f.web('GET','/api/command-suggestions')).json().suggestions.length,1);
+    const audited=f.db.prepare("SELECT details FROM security_events WHERE event='oauth_grant.update' ORDER BY seq").all() as any[];
+    assert.deepEqual(audited.map(a=>JSON.parse(a.details).allowSuggestions),[true,undefined,false]);
   }finally{f.done();}
 });

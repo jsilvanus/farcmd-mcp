@@ -23,6 +23,7 @@ const NEXT_STEP='Show approvalUrl to the person and wait until they say they hav
 export interface PendingConfirmation {ok:true;pending:true;commandId:string;level:CommandLevel;confirmation:ConfirmationRequirement;approvalUrl:string;confirmationToken:string;expiresAt:number;
   /** Plain-language instructions for the model. */
   next:string;}
+const SUGGESTIONS_OFF='Command suggestions are not allowed for this OAuth source. The person can allow them for this client on the OAuth Sources page of the farcmd web UI.';
 const SUGGESTION_NEXT='Show reviewUrl to the person. Nothing was created: the person reviews the suggestion in the farcmd web UI, picks the target and level, and creates, installs and enables the command there (or dismisses it). You cannot create, install, enable or run it yourself.';
 /** A suggestion as the MCP client sees it: its own fields and the review outcome, never anything else of the account. */
 export interface SuggestionSummary { id:string; name:string; level:CommandLevel; status:SuggestionStatus; createdAt:number; resolvedAt?:number; reviewUrl:string; }
@@ -35,6 +36,8 @@ export interface FarcmdConnector {
   health(context:ConnectorContext):Promise<{ok:true}>;
   listCommands(context:ConnectorContext):Promise<CommandSummary[]>;
   visibleLevels(context:ConnectorContext):CommandLevel[];
+  /** Whether this client's OAuth source allows command suggestions (and MCP access is on). */
+  suggestionsAllowed(context:ConnectorContext):boolean;
   executeCommand(context:ConnectorContext,commandId:string,expectedLevel:CommandLevel,confirmationToken?:string):Promise<CommandExecution|PendingConfirmation>;
   approvePending(userId:string,token:string,password?:string):Promise<CommandExecution>;
   awaitConfirmation(context:ConnectorContext,commandId:string,level:CommandLevel,token:string,signal:AbortSignal):Promise<CommandExecution|undefined>;
@@ -81,11 +84,18 @@ export class FarcmdConnectorImpl implements FarcmdConnector {
     if(!grant)return [];
     return this.commands.list(context.userId).filter(c=>c.enabled&&grant.visibleLevels.includes(c.level)).map(c=>({id:c.id,name:c.name,description:c.description,level:c.level,enabled:c.enabled,confirmation:confirmationForLevel(c.level)}));
   }
-  suggestionReviewUrl(id:string):string{return this.publicUrl+'/?page=suggestion&id='+encodeURIComponent(id);}
-  async suggestCommand(context:ConnectorContext,input:SuggestionInput):Promise<SuggestionResult>{
+  suggestionsAllowed(context:ConnectorContext):boolean{return this.access.check(context.userId).allowed&&!!this.activeGrant(context.userId,context.clientId)?.allowSuggestions;}
+  /** The grant, if this client may use the suggestion tools; otherwise throws the reason. */
+  private suggestionGrant(context:ConnectorContext){
     this.access.assertAllowed(context.userId);
     const grant=this.activeGrant(context.userId,context.clientId);
     if(!grant)throw new Error('This OAuth authorization has been revoked or does not exist.');
+    if(!grant.allowSuggestions)throw new Error(SUGGESTIONS_OFF);
+    return grant;
+  }
+  suggestionReviewUrl(id:string):string{return this.publicUrl+'/?page=suggestion&id='+encodeURIComponent(id);}
+  async suggestCommand(context:ConnectorContext,input:SuggestionInput):Promise<SuggestionResult>{
+    const grant=this.suggestionGrant(context);
     const invalid=validateSuggestion(input); if(invalid)throw new Error('Invalid suggestion: '+invalid);
     if(this.suggestions.countPending(context.userId)>=MAX_PENDING_SUGGESTIONS)throw new Error('There are already '+MAX_PENDING_SUGGESTIONS+' suggestions waiting for review. Ask the person to review or dismiss them in the farcmd web UI first.');
     this.grants.touch(context.userId,context.clientId);
@@ -98,8 +108,7 @@ export class FarcmdConnectorImpl implements FarcmdConnector {
     return {ok:true,suggestionId:record.id,status:'pending',reviewUrl:this.suggestionReviewUrl(record.id),next:SUGGESTION_NEXT};
   }
   async listSuggestions(context:ConnectorContext):Promise<SuggestionSummary[]>{
-    this.access.assertAllowed(context.userId);
-    if(!this.activeGrant(context.userId,context.clientId))return [];
+    this.suggestionGrant(context);
     return this.suggestions.list(context.userId,undefined,context.clientId,50).map(s=>({id:s.id,name:s.name,level:s.level,status:s.status,createdAt:s.createdAt,...(s.resolvedAt!==undefined?{resolvedAt:s.resolvedAt}:{}),reviewUrl:this.suggestionReviewUrl(s.id)}));
   }
   async executeCommand(context:ConnectorContext,commandId:string,expectedLevel:CommandLevel,confirmationToken?:string):Promise<CommandExecution|PendingConfirmation>{

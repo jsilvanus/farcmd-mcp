@@ -334,11 +334,12 @@ async function oauthPage(){
   const levelBoxes=(g:any)=>[1,2,3,4,5].map(l=>'<label class="check"><input type="checkbox" name="level" value="'+l+'"'+(g.visibleLevels.includes(l)?' checked':'')+(l===5&&g.level5PermanentlyHidden?' disabled':'')+'><span>Level '+l+' · '+escapeHtml(LEVELS[l]!)+'</span></label>').join('');
   const grantRow=(g:any)=>'<li class="grant">'+
     '<div class="row-main"><strong>'+escapeHtml(g.clientName||g.clientId)+'</strong><small class="mono">'+escapeHtml(g.clientId)+'</small><div class="pills">'+
-      (g.revoked?pill('Revoked','bad'):pill('Active','ok'))+pill(g.lastUsedAt?'Last used '+new Date(g.lastUsedAt).toLocaleString():'Not used yet')+(g.level5PermanentlyHidden?pill('Level 5 permanently hidden','warn'):'')+'</div></div>'+
+      (g.revoked?pill('Revoked','bad'):pill('Active','ok'))+pill(g.lastUsedAt?'Last used '+new Date(g.lastUsedAt).toLocaleString():'Not used yet')+(g.level5PermanentlyHidden?pill('Level 5 permanently hidden','warn'):'')+(g.allowSuggestions?pill('Suggestions allowed'):'')+'</div></div>'+
     (g.revoked?'<p class="hint">This client was revoked. It has to be authorized again before it can use farcmd.</p>'
       :'<form data-oauth-form="'+escapeHtml(g.clientId)+'"><fieldset class="level-grid"><legend>Levels this client can see</legend>'+levelBoxes(g)+'</fieldset>'+
         '<label class="check"><input type="checkbox" name="permanentLevel5"'+(g.level5PermanentlyHidden?' checked disabled':'')+'><span>Permanently hide level 5 from this client (cannot be undone)</span></label>'+
-        '<div class="grant-actions"><button class="small primary" type="submit">Save levels</button><button class="small danger" type="button" data-revoke-oauth="'+escapeHtml(g.clientId)+'">Revoke</button><span class="form-message" role="status"></span></div></form>')+
+        '<label class="check"><input type="checkbox" name="allowSuggestions"'+(g.allowSuggestions?' checked':'')+'><span>Allow suggestions: the client may propose new commands, which you review on the Commands page. It cannot create, install, enable or run them.</span></label>'+
+        '<div class="grant-actions"><button class="small primary" type="submit">Save</button><button class="small danger" type="button" data-revoke-oauth="'+escapeHtml(g.clientId)+'">Revoke</button><span class="form-message" role="status"></span></div></form>')+
     '</li>';
   shell('OAuth Sources','<div id="mcp-access"></div><article>'+sectionHead('Authorized MCP clients','')+
     '<p class="hint">Each client sees only the command levels ticked here. Whether it asks before a call is the client\'s own setting; levels 4 and 5 always need your approval in farcmd as well.</p>'+
@@ -348,7 +349,7 @@ async function oauthPage(){
     permanent.addEventListener('change',()=>{if(permanent.checked){level5.checked=false;}level5.disabled=permanent.checked;});
     f.onsubmit=async e=>{e.preventDefault();const message=f.querySelector('.form-message')!;const levels=[...f.querySelectorAll<HTMLInputElement>('input[name="level"]:checked')].map(x=>Number(x.value));
       if(permanent.checked&&!permanent.disabled&&!confirm('Permanently hide level 5 from this client? This cannot be undone.'))return;
-      try{await api('/api/oauth/grants/'+encodeURIComponent(f.dataset.oauthForm!),{method:'PATCH',body:JSON.stringify({visibleLevels:levels,level5PermanentlyHidden:permanent.checked})});oauthPage();}catch(err){message.textContent=(err as Error).message;}};
+      try{await api('/api/oauth/grants/'+encodeURIComponent(f.dataset.oauthForm!),{method:'PATCH',body:JSON.stringify({visibleLevels:levels,level5PermanentlyHidden:permanent.checked,allowSuggestions:f.querySelector<HTMLInputElement>('input[name="allowSuggestions"]')!.checked})});oauthPage();}catch(err){message.textContent=(err as Error).message;}};
   });
   document.querySelectorAll<HTMLElement>('[data-revoke-oauth]').forEach(b=>b.onclick=async()=>{if(confirm('Revoke this client? It loses access at once and has to be authorized again.')){await api('/api/oauth/grants/'+encodeURIComponent(b.dataset.revokeOauth!)+'/revoke',{method:'POST'});oauthPage();}});
   mcpAccessPanel();

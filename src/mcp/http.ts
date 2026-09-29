@@ -49,10 +49,12 @@ export async function mountMcpHttp(app: FastifyInstance, options: McpHttpOptions
     // A client's answer to an elicitation farcmd sent on another request's stream (see elicitation.ts).
     if(messages.length>0&&messages.every(m=>deliverElicitationResponse(m,userId,authInfo.clientId)))return reply.code(202).send();
 
-    const visibleLevels=userId?options.connector.visibleLevels({userId,clientId:authInfo.clientId,accessToken:authInfo.token}):[];
+    const context=userId?{userId,clientId:authInfo.clientId,accessToken:authInfo.token}:undefined;
+    const visibleLevels=context?options.connector.visibleLevels(context):[];
+    const suggestionsAllowed=context?options.connector.suggestionsAllowed(context):false;
     const transport = new StreamableHTTPServerTransport({});
     const closed = new AbortController();
-    const server = createMcpServer({connector:options.connector,publicUrl:options.publicUrl,visibleLevels,connectionSignal:closed.signal,
+    const server = createMcpServer({connector:options.connector,publicUrl:options.publicUrl,visibleLevels,suggestionsAllowed,connectionSignal:closed.signal,
       sendRelated:(message,relatedRequestId)=>transport.send(message as any,{relatedRequestId})});
     await server.connect(transport as unknown as Transport);
 

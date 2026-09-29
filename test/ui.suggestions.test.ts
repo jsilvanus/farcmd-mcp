@@ -20,12 +20,13 @@ import { SqliteAuthStore, SqliteUserStore } from '../src/storage/sqlite.js';
 import { UserAdmin } from '../src/user-admin.js';
 import { mountWebApi } from '../src/web-api.js';
 import { SqliteCommandSuggestionStore, type CommandSuggestionRecord } from '../src/storage/command-suggestions.js';
+import { SqliteOAuthGrantStore } from '../src/oauth/grants.js';
 
 process.env.FARCMD_ENCRYPTION_KEY??=randomBytes(32).toString('base64');
 const WEB_ROOT=fileURLToPath(new URL('../dist/web/',import.meta.url));
 const PASSWORD='correct horse battery staple';
 
-test('web UI: review a suggested command from its link, create it, dismiss another',{skip:!existsSync(join(WEB_ROOT,'index.html'))&&'dist/web missing: run npm run build'},async()=>{
+test('web UI: review a suggested command from its link, create it, dismiss another, allow suggestions per OAuth source',{skip:!existsSync(join(WEB_ROOT,'index.html'))&&'dist/web missing: run npm run build'},async()=>{
   const dir=mkdtempSync(join(tmpdir(),'farcmd-ui-suggestions-'));
   const store=new SqliteAuthStore(join(dir,'app.sqlite')); const db=store.getDatabase();
   const port=await new Promise<number>(resolve=>{const s=createServer();s.listen(0,'127.0.0.1',()=>{const p=(s.address() as any).port;s.close(()=>resolve(p));});});
@@ -42,6 +43,7 @@ test('web UI: review a suggested command from its link, create it, dismiss anoth
   const suggestion=(name:string,content:string):CommandSuggestionRecord=>({id:randomUUID(),userId:user.id,clientId:'https://claude.ai',clientName:'Claude',name,description:'Suggested in chat',type:'shell',content,level:3,targetHint:'the dev server',rationale:'Needed for redeploys',status:'pending',createdAt:now});
   const redeploy=suggestion('saarnavideo: redeploy','/opt/server-commands/saarnavideo-redeploy.sh'); const wipe=suggestion('wipe everything','rm -rf /srv');
   suggestions.create(redeploy); suggestions.create(wipe);
+  const grants=new SqliteOAuthGrantStore(db); grants.upsert(user.id,'https://claude.ai','Claude',[1,2,3],false);
   const browser=await chromium.launch(process.env.FARCMD_CHROMIUM?{executablePath:process.env.FARCMD_CHROMIUM}:{});
   try{
     const page=await browser.newPage(); const problems:string[]=[];
@@ -78,6 +80,15 @@ test('web UI: review a suggested command from its link, create it, dismiss anoth
     await page.getByRole('heading',{name:/Suggested by MCP clients/}).waitFor({state:'detached'});
     assert.equal(suggestions.get(user.id,wipe.id)?.status,'dismissed');
     assert.equal((db.prepare('SELECT COUNT(*) AS n FROM commands').get() as any).n,1);
+    // OAuth Sources: suggestions are allowed per client with a checkbox (off by default).
+    await page.getByRole('link',{name:'OAuth Sources',exact:true}).click();
+    const source=page.locator('.grant',{hasText:'Claude'});
+    assert.equal(await source.getByLabel(/Allow suggestions/).isChecked(),false,'off by default');
+    await source.getByLabel(/Allow suggestions/).check(); await source.getByRole('button',{name:'Save'}).click();
+    await page.locator('.grant',{hasText:'Claude'}).getByText('Suggestions allowed').waitFor();
+    assert.equal(grants.get(user.id,'https://claude.ai')?.allowSuggestions,true);
+    assert.deepEqual(grants.get(user.id,'https://claude.ai')?.visibleLevels,[1,2,3],'levels unchanged');
+    if(process.env.FARCMD_UI_SCREENSHOTS)await page.screenshot({path:join(process.env.FARCMD_UI_SCREENSHOTS,'oauth-suggestions.png'),fullPage:true});
     // An already reviewed link says so instead of opening a form.
     await page.goto(address+'/?page=suggestion&id='+wipe.id);
     await page.getByRole('heading',{name:'Command registry'}).waitFor();
