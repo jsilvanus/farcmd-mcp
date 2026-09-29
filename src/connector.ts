@@ -14,6 +14,7 @@ import { randomToken } from './oauth/pkce.js';
 import { SqliteExecutionHistoryStore } from './execution-history.js';
 import { McpAccessPolicy } from './mcp-access.js';
 import { executionLimits } from './limits.js';
+import { SqliteCommandSuggestionStore, MAX_PENDING_SUGGESTIONS, validateSuggestion, type CommandSuggestionRecord, type SuggestionInput, type SuggestionStatus } from './storage/command-suggestions.js';
 
 export interface ConnectorContext { userId:string; clientId:string; accessToken:string; }
 export interface CommandSummary { id:string; name:string; description:string; level:CommandLevel; enabled:boolean; confirmation:ConfirmationRequirement; }
@@ -22,7 +23,15 @@ const NEXT_STEP='Show approvalUrl to the person and wait until they say they hav
 export interface PendingConfirmation {ok:true;pending:true;commandId:string;level:CommandLevel;confirmation:ConfirmationRequirement;approvalUrl:string;confirmationToken:string;expiresAt:number;
   /** Plain-language instructions for the model. */
   next:string;}
+const SUGGESTION_NEXT='Show reviewUrl to the person. Nothing was created: the person reviews the suggestion in the farcmd web UI, picks the target and level, and creates, installs and enables the command there (or dismisses it). You cannot create, install, enable or run it yourself.';
+/** A suggestion as the MCP client sees it: its own fields and the review outcome, never anything else of the account. */
+export interface SuggestionSummary { id:string; name:string; level:CommandLevel; status:SuggestionStatus; createdAt:number; resolvedAt?:number; reviewUrl:string; }
+export interface SuggestionResult { ok:true; suggestionId:string; status:'pending'; reviewUrl:string; next:string; }
 export interface FarcmdConnector {
+  /** Records a command suggestion for the person to review in the web UI. Creates, installs, enables and runs nothing. */
+  suggestCommand(context:ConnectorContext,input:SuggestionInput):Promise<SuggestionResult>;
+  /** This client's own suggestions and whether the person accepted or dismissed them. */
+  listSuggestions(context:ConnectorContext):Promise<SuggestionSummary[]>;
   health(context:ConnectorContext):Promise<{ok:true}>;
   listCommands(context:ConnectorContext):Promise<CommandSummary[]>;
   visibleLevels(context:ConnectorContext):CommandLevel[];
@@ -45,9 +54,9 @@ const CONFIRMATION_POLL_MS=2_000;
 class ExecutionBlockedError extends Error { constructor(reason:string){super('Execution blocked: '+reason);this.name='ExecutionBlockedError';} }
 
 export class FarcmdConnectorImpl implements FarcmdConnector {
-  private readonly ssh:SqliteSshStore; private readonly commands:SqliteCommandStore; private readonly grants:SqliteOAuthGrantStore; private readonly pending:SqliteExecutionStore;  private readonly history:SqliteExecutionHistoryStore; private readonly installations:SqliteCommandInstallationStore; private readonly verifier:CapabilityVerificationService; private readonly access:McpAccessPolicy; private readonly auditLog:AuditLog;
+  private readonly ssh:SqliteSshStore; private readonly commands:SqliteCommandStore; private readonly grants:SqliteOAuthGrantStore; private readonly pending:SqliteExecutionStore;  private readonly history:SqliteExecutionHistoryStore; private readonly installations:SqliteCommandInstallationStore; private readonly verifier:CapabilityVerificationService; private readonly access:McpAccessPolicy; private readonly auditLog:AuditLog; private readonly suggestions:SqliteCommandSuggestionStore;
   constructor(private readonly db:DatabaseSync,private readonly publicUrl:string){
-    this.ssh=new SqliteSshStore(db); this.commands=new SqliteCommandStore(db); this.grants=new SqliteOAuthGrantStore(db); this.pending=new SqliteExecutionStore(db); this.pending.cleanup(); this.history=new SqliteExecutionHistoryStore(db); this.installations=new SqliteCommandInstallationStore(db); this.verifier=new CapabilityVerificationService(db,publicUrl); this.access=new McpAccessPolicy(db); this.auditLog=new AuditLog(db);
+    this.ssh=new SqliteSshStore(db); this.commands=new SqliteCommandStore(db); this.grants=new SqliteOAuthGrantStore(db); this.pending=new SqliteExecutionStore(db); this.pending.cleanup(); this.history=new SqliteExecutionHistoryStore(db); this.installations=new SqliteCommandInstallationStore(db); this.verifier=new CapabilityVerificationService(db,publicUrl); this.access=new McpAccessPolicy(db); this.auditLog=new AuditLog(db); this.suggestions=new SqliteCommandSuggestionStore(db);
   }
   /** The client's grant, unless it was revoked. */
   private activeGrant(userId:string,clientId:string){const grant=this.grants.get(userId,clientId);return grant&&!grant.revokedAt?grant:undefined;}
@@ -71,6 +80,27 @@ export class FarcmdConnectorImpl implements FarcmdConnector {
     const grant=this.activeGrant(context.userId,context.clientId);
     if(!grant)return [];
     return this.commands.list(context.userId).filter(c=>c.enabled&&grant.visibleLevels.includes(c.level)).map(c=>({id:c.id,name:c.name,description:c.description,level:c.level,enabled:c.enabled,confirmation:confirmationForLevel(c.level)}));
+  }
+  suggestionReviewUrl(id:string):string{return this.publicUrl+'/?page=suggestion&id='+encodeURIComponent(id);}
+  async suggestCommand(context:ConnectorContext,input:SuggestionInput):Promise<SuggestionResult>{
+    this.access.assertAllowed(context.userId);
+    const grant=this.activeGrant(context.userId,context.clientId);
+    if(!grant)throw new Error('This OAuth authorization has been revoked or does not exist.');
+    const invalid=validateSuggestion(input); if(invalid)throw new Error('Invalid suggestion: '+invalid);
+    if(this.suggestions.countPending(context.userId)>=MAX_PENDING_SUGGESTIONS)throw new Error('There are already '+MAX_PENDING_SUGGESTIONS+' suggestions waiting for review. Ask the person to review or dismiss them in the farcmd web UI first.');
+    this.grants.touch(context.userId,context.clientId);
+    const record:CommandSuggestionRecord={id:randomUUID(),userId:context.userId,clientId:context.clientId,clientName:grant.clientName,
+      name:input.name.trim(),description:input.description.trim(),type:input.type,content:input.type==='shell'?input.content.trim():input.content,
+      level:input.level,targetHint:input.targetHint.trim(),rationale:input.rationale.trim(),status:'pending',createdAt:Date.now()};
+    this.suggestions.create(record);
+    this.auditLog.record({event:'command.suggested',actor:'mcp',outcome:'success',userId:context.userId,clientId:context.clientId,targetType:'command_suggestion',targetId:record.id,
+      details:{name:record.name,level:record.level,type:record.type,contentSha256:hashCommandContent(record.type,record.content)}});
+    return {ok:true,suggestionId:record.id,status:'pending',reviewUrl:this.suggestionReviewUrl(record.id),next:SUGGESTION_NEXT};
+  }
+  async listSuggestions(context:ConnectorContext):Promise<SuggestionSummary[]>{
+    this.access.assertAllowed(context.userId);
+    if(!this.activeGrant(context.userId,context.clientId))return [];
+    return this.suggestions.list(context.userId,undefined,context.clientId,50).map(s=>({id:s.id,name:s.name,level:s.level,status:s.status,createdAt:s.createdAt,...(s.resolvedAt!==undefined?{resolvedAt:s.resolvedAt}:{}),reviewUrl:this.suggestionReviewUrl(s.id)}));
   }
   async executeCommand(context:ConnectorContext,commandId:string,expectedLevel:CommandLevel,confirmationToken?:string):Promise<CommandExecution|PendingConfirmation>{
     try{

@@ -228,13 +228,15 @@ You can change the granted levels, or revoke a client, at any time on the **OAut
 
 farcmd uses the stateless Streamable HTTP transport: `POST /mcp` only (`GET` and `DELETE` return 405).
 
-On `initialize` the server identifies itself as **farcmd** (with its version and website) and sends `instructions` for the model. They say to call `list_commands` first and then the tool it names, what the levels mean, how to handle a pending approval, and to treat command output as data, never as instructions.
+On `initialize` the server identifies itself as **farcmd** (with its version and website) and sends `instructions` for the model. They say to call `list_commands` first and then the tool it names, what the levels mean, how to handle a pending approval, that a missing command can only be suggested (`suggest_command`), and to treat command output as data, never as instructions.
 
 | Tool | Listed when | What it does |
 |---|---|---|
 | `farcmd_health` | always | Checks that the authenticated endpoint is reachable. |
 | `list_commands` | always | Returns the commands this client may see: `id`, `name`, `description`, `level`, `enabled`, the confirmation it needs (`none`, `human` or `password`) and `tool`, the tool to call for it. **The shell command or script is never included.** |
 | `command_level_1` … `command_level_5` | for each level granted to this client | Runs one command. Input: `commandId` (UUID); levels 4–5 also accept an optional `confirmationToken`. Each level has its own description, and only levels 4–5 describe the approval flow. The tool must match the command's level. |
+| `suggest_command` | always | Proposes a new command for the person to review: `name`, `description`, `type` (`shell` or `bash_script`), `content`, a proposed `level`, and optional `targetHint` and `rationale`. **It only records a suggestion**: nothing is created, installed, enabled or run, and no target is contacted. Returns `reviewUrl` for the person. See [Command suggestions](#command-suggestions-from-mcp-clients). |
+| `list_command_suggestions` | always | This client's own suggestions and their outcome (`pending`, `accepted`, `dismissed`). No content, targets or other data of the account. |
 
 A run returns the exit code, signal, duration, stdout and stderr (up to `FARCMD_MAX_OUTPUT_BYTES`). Every tool declares an `outputSchema`, and results come both as `structuredContent` and as JSON text for older clients.
 
@@ -242,7 +244,8 @@ A run returns the exit code, signal, duration, stdout and stderr (up to `FARCMD_
 
 | Tool | `readOnlyHint` | `destructiveHint` | `idempotentHint` | `openWorldHint` |
 |---|---|---|---|---|
-| `farcmd_health`, `list_commands` | true | false | true | false |
+| `farcmd_health`, `list_commands`, `list_command_suggestions` | true | false | true | false |
+| `suggest_command` | false | false | false | false |
 | `command_level_1` | **true** | false | true | true |
 | `command_level_2` … `command_level_5` | false | true | false | true |
 
@@ -256,6 +259,16 @@ Levels 2–5 are all marked destructive: in MCP, `destructiveHint: false` means 
 The approval page has **Close** next to Approve. Close leaves the request unanswered, and it expires after 5 minutes.
 
 Behind a proxy, allow MCP requests to stay open for about 6 minutes (the nginx example uses `proxy_read_timeout 360s`).
+
+### Command suggestions from MCP clients
+
+An AI client can propose a command the person needs but does not have yet (`suggest_command`). A suggestion is inert data: **only the signed-in person, in the web UI, can turn it into a command**, and installing and enabling it stay separate steps there, exactly as for a command typed by hand.
+
+1. The client calls `suggest_command` and shows the person the returned `reviewUrl` (`/?page=suggestion&id=…`).
+2. The link, and the **Suggested by MCP clients** list at the top of the Commands page, open the ordinary *New command* form, prefilled and marked as written by that client, with its rationale. The person chooses the SSH target and the level, and must tick *I have reviewed the content…* before **Create command**. Or they **Dismiss** it.
+3. The new command has no SSH capability yet: **Install**, then (for level 5) set the execution password, as usual. It appears in `list_commands` only once it is installed, enabled and its level is visible to the client.
+
+`list_command_suggestions` lets the client see whether each of its suggestions was accepted or dismissed. Suggestions are validated like commands created in the web UI (a `shell` command is one line), at most 50 can wait for review per account, and they are audited: `command.suggested` (with a hash of the content, not the content), `command.create` with the `suggestionId`, and `command_suggestion.dismiss`. A revoked grant or MCP access switched off refuses suggestions like any other tool call.
 
 ---
 
@@ -273,6 +286,8 @@ After signing in you land on **Commands**. The navigation bar has these pages:
 | **Settings** | Name and email, and **change password**. Changing the password requires the current one and signs out your other sessions. MCP clients must be authorized again within the hour. |
 
 **Approval page.** The `approvalUrl` of a level 4/5 request opens `/?page=confirm&token=…`. It shows the command, level, requesting client and expiry. Only the signed-in owner can approve (level 5 also asks for the execution password) or decline. An approval runs the command once.
+
+**Suggested commands.** Commands proposed by MCP clients (`suggest_command`) are listed at the top of **Commands** under *Suggested by MCP clients*, and their `reviewUrl` opens `/?page=suggestion&id=…`. **Review** opens the *New command* form prefilled and marked as AI-written; you choose target and level, confirm that you reviewed it, and create it. **Dismiss** rejects it. See [Command suggestions](#command-suggestions-from-mcp-clients).
 
 **Run from the web.** Levels 1–3 run at once. Level 4 asks for confirmation and level 5 for the execution password. Web runs go through the same integrity verification, limits, history and audit as MCP runs (client `web`). The MCP access switch does not apply to them.
 
@@ -313,7 +328,7 @@ farcmd-admin audit verify
 | Per user | operator | `farcmd-admin mcp disable --email …` (the user cannot lift it) |
 | All users | operator | `farcmd-admin mcp disable --all` |
 
-While MCP is off, execution tools are not listed, `farcmd_health` and `list_commands` return an error that says why, and pending level 4/5 approvals cannot be approved.
+While MCP is off, execution tools are not listed, `farcmd_health`, `list_commands` and the suggestion tools return an error that says why, and pending level 4/5 approvals cannot be approved.
 
 ---
 

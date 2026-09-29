@@ -7,6 +7,7 @@ import { SqliteOAuthGrantStore } from '../oauth/grants.js';
 import { AuditLog, migrateAuditTable, type AuditOutcome } from '../audit.js';
 import { SqliteOAuthTokenStore, hashToken, migrateOAuthTokenTables } from '../oauth/tokens.js';
 import { migrateMcpAccess } from '../mcp-access.js';
+import { migrateCommandSuggestions } from './command-suggestions.js';
 import { hashCommandContent } from '../command-registry.js';
 
 /** Schema upgrade for older databases: adds each column unless it already exists. */
@@ -48,6 +49,7 @@ export class SqliteAuthStore implements AuthStore, WebSessionStore {
     migrateAuditTable(this.db);
     migrateOAuthTokenTables(this.db);
     migrateMcpAccess(this.db);
+    migrateCommandSuggestions(this.db);
     addColumns(this.db,'users',['disabled_at INTEGER']);
     // Web session tokens are stored as SHA-256 hashes (64 hex chars), like OAuth tokens: a database copy yields no usable sessions.
     try{const legacy=this.db.prepare('SELECT token FROM web_sessions WHERE length(token)<>64').all() as {token:string}[];const update=this.db.prepare('UPDATE web_sessions SET token=? WHERE token=?');for(const row of legacy)update.run(hashToken(row.token),row.token);this.db.prepare('DELETE FROM web_sessions WHERE expires<?').run(Date.now());}catch{}
