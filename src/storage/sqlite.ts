@@ -39,6 +39,9 @@ export class SqliteAuthStore implements AuthStore, WebSessionStore {
     addColumns(this.db,'ssh_keys',['public_key TEXT']);
     addColumns(this.db,'commands',["type TEXT NOT NULL DEFAULT 'shell'","content TEXT NOT NULL DEFAULT ''"]);
     try{this.db.exec("UPDATE commands SET content=shell_command WHERE content='' AND shell_command<>''");}catch{}
+    // version/changed_at: existing commands start at version 1, changed when last updated.
+    addColumns(this.db,'commands',['version INTEGER NOT NULL DEFAULT 1','changed_at INTEGER']);
+    try{this.db.exec('UPDATE commands SET changed_at=updated_at WHERE changed_at IS NULL');}catch{}
     addColumns(this.db,'commands',["command_sha256 TEXT NOT NULL DEFAULT ''",'execution_password_hash TEXT','show_output_on_approval INTEGER NOT NULL DEFAULT 0','verify_integrity INTEGER NOT NULL DEFAULT 0']);
     try{const rows=this.db.prepare("SELECT id,type,content FROM commands WHERE command_sha256=''").all() as any[];const update=this.db.prepare('UPDATE commands SET command_sha256=? WHERE id=?');for(const row of rows)update.run(hashCommandContent(row.type,String(row.content)),row.id);}catch{}
     try{this.db.exec("ALTER TABLE command_keys RENAME TO command_installations");}catch{}

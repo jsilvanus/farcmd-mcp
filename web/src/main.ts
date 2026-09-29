@@ -1,5 +1,7 @@
 import './style.css';
 import { securityReviewPrompt } from './review-prompt.js';
+import { describeNameWarning, nameWarnings } from './similar-names.js';
+import { lineDiff } from './line-diff.js';
 
 type User = { id:string; name:string; email?:string; createdAt:number };
 
@@ -250,10 +252,18 @@ async function commandsPage(reviewSuggestionId?:string){
   const [cr,tr,sr]=await Promise.all([api('/api/commands'),api('/api/ssh/targets'),api('/api/command-suggestions')]);
   const cs=cr.commands as any[],ts=tr.targets as any[],ss=sr.suggestions as any[];
   const targetName=(id:string)=>ts.find(t=>t.id===id)?.name??'unknown target';
+  /**
+   * Names an MCP client (or a person) could mistake for this one: existing commands and pending suggestions of
+   * new commands (a suggested change keeps its command's name). ownId excludes the entry itself.
+   */
+  const namePool=[...cs.map(c=>({id:c.id,name:c.name,source:'command' as const})),...ss.filter(x=>!x.replacesCommandId).map(x=>({id:x.id,name:x.name,source:'suggestion' as const}))];
+  const lookalikes=(name:string,ownId?:string)=>nameWarnings(name,namePool,ownId);
+  const warningPills=(name:string,ownId?:string)=>lookalikes(name,ownId).map(w=>pill(w.kind==='unicode'?'Non-ASCII letters in name':(w.kind==='duplicate'?'Same name as ':'Name looks like ')+(w.source==='suggestion'?'suggestion ':'')+'"'+w.name+'"','bad')).join('');
   const commandRows=cs.map(c=>row(
     '<strong>'+escapeHtml(c.name)+'</strong>'+(c.description?'<small>'+escapeHtml(c.description)+'</small>':'')+
     '<div class="pills">'+pill('Level '+c.level+' · '+LEVELS[c.level],c.level>=5?'bad':c.level>=4?'warn':'muted')+pill(targetName(c.targetId))+pill(c.type==='bash_script'?'Bash script':'Shell')+
       (c.enabled?'':pill('Disabled','warn'))+(c.commandKey?pill('Capability installed','ok'):pill('No capability'))+
+      '<span title="The version goes up whenever what the command runs changes (content, type, target, level). MCP clients see it.">'+pill('v'+c.version+' · changed '+new Date(c.changedAt).toLocaleDateString())+'</span>'+warningPills(c.name,c.id)+
       (c.level===5?pill(c.hasExecutionPassword?'Password set':'Password not set',c.hasExecutionPassword?'ok':'bad'):'')+
       (c.level<3&&c.verifyIntegrity?pill('Verified','ok'):'')+(needsVerifier(c)&&c.integrityVerification!=='active'?pill('Blocked: no active verifier','bad'):'')+'</div>',
     // Workflow left to right: Edit -> Install -> Run. Editing is locked (target, type, content) while installed.
@@ -266,13 +276,14 @@ async function commandsPage(reviewSuggestionId?:string){
       '<button class="small" data-toggle-command="'+c.id+'">'+(c.enabled?'Disable':'Enable')+'</button><button class="small danger" data-delete-command="'+c.id+'">Delete</button>'+
     '</div></div>'));
   // Suggestions are inert until the person creates a command from one; MCP clients cannot create, install or enable commands.
+  const replaced=(s:any)=>s.replacesCommandId?cs.find(c=>c.id===s.replacesCommandId):undefined;
   const suggestionRows=ss.map(s=>row(
     '<strong>'+escapeHtml(s.name)+'</strong>'+(s.description?'<small>'+escapeHtml(s.description)+'</small>':'')+
-    '<div class="pills">'+pill('Level '+s.level+' · '+LEVELS[s.level],s.level>=5?'bad':s.level>=4?'warn':'muted')+pill(s.type==='bash_script'?'Bash script':'Shell')+pill('From '+s.clientName)+pill(new Date(s.createdAt).toLocaleString())+'</div>',
-    '<button class="small" data-copy-suggestion="'+escapeHtml(s.id)+'" title="Copies the suggestion with a security-review prompt, to paste into another AI agent">Copy for review</button><button class="small primary" data-review-suggestion="'+escapeHtml(s.id)+'"'+(ts.length?'':' disabled title="Add an SSH target first"')+'>Review</button><button class="small danger" data-dismiss-suggestion="'+escapeHtml(s.id)+'">Dismiss</button>'));
+    '<div class="pills">'+(s.replacesCommandId?pill('⚠ Changes existing command: '+(replaced(s)?.name??'(deleted)'),'bad'):warningPills(s.name,s.id))+pill('Level '+s.level+' · '+LEVELS[s.level],s.level>=5?'bad':s.level>=4?'warn':'muted')+pill(s.type==='bash_script'?'Bash script':'Shell')+pill('From '+s.clientName)+pill(new Date(s.createdAt).toLocaleString())+'</div>',
+    '<button class="small" data-copy-suggestion="'+escapeHtml(s.id)+'" title="Copies the suggestion with a security-review prompt, to paste into another AI agent">Copy for review</button><button class="small primary" data-review-suggestion="'+escapeHtml(s.id)+'"'+(ts.length?'':' disabled title="Add an SSH target first"')+'>'+(s.replacesCommandId?'Review change':'Review')+'</button><button class="small danger" data-dismiss-suggestion="'+escapeHtml(s.id)+'">Dismiss</button>'));
   shell('Commands','<div id="mcp-access"></div>'+
     (ss.length?'<article>'+sectionHead('Suggested by MCP clients ('+ss.length+')','')+
-      '<p class="hint">An AI client proposed these commands. Nothing has been created: review one to create it as a command (then Install and Run as usual), or dismiss it.</p>'+
+      '<p class="hint">An AI client proposed these commands, or changes to existing ones. Nothing has been created or changed: review one to create it as a command (then Install and Run as usual) or to apply a change, or dismiss it.</p>'+
       rows(suggestionRows,'')+'</article>':'')+
     '<article>'+sectionHead('Command registry','<button class="small primary" id="new-command"'+(ts.length?'':' disabled title="Add an SSH target first"')+'>New command</button>')+
     '<p class="hint">A command is an MCP capability. Install creates a dedicated SSH key on the target that can only run this command’s farcmd-managed script.</p>'+
@@ -284,14 +295,16 @@ async function commandsPage(reviewSuggestionId?:string){
   const wireVerify=(d:HTMLDialogElement,c?:any)=>{const level=d.querySelector<HTMLSelectElement>('select[name=level]')!,box=d.querySelector<HTMLInputElement>('input[name=verifyIntegrity]')!,hint=d.querySelector('[data-verify-hint]')!;
     let own=!!c?.verifyIntegrity; box.onchange=()=>{if(!box.disabled)own=box.checked;};
     level.onchange=()=>{const always=Number(level.value)>=3; box.disabled=always; box.checked=always||own; hint.textContent=verifyHint(Number(level.value));};};
-  const commandFields=(c?:any)=>{const locked=!!c?.commandKey; const dis=locked?' disabled':'';
+  /** proposedLevel: a suggestion's level, shown as a hint only; the person must choose the level. */
+  const commandFields=(c?:any,proposedLevel?:number)=>{const locked=!!c?.commandKey; const dis=locked?' disabled':'';
     return (locked?'<p class="locked-note"><span aria-hidden="true">🔒 </span>The SSH capability is installed, so target, type and content are locked (shown as installed). Name, description, level, verification and output setting can still be changed. Uninstall to change the rest.</p>':'')+
-      '<label>Name<input name="name" required maxlength="120" value="'+escapeHtml(c?.name??'')+'"></label>'+
+      '<label>Name<input name="name" required maxlength="120" value="'+escapeHtml(c?.name??'')+'"></label><div class="name-warnings" data-name-warnings role="alert"></div>'+
       '<label>Description<textarea name="description" rows="2" maxlength="2000">'+escapeHtml(c?.description??'')+'</textarea></label>'+
       '<div class="field-row"><label>Target<select name="targetId" required'+dis+'>'+ts.map(t=>'<option value="'+escapeHtml(t.id)+'"'+(t.id===c?.targetId?' selected':'')+'>'+escapeHtml(t.name)+'</option>').join('')+'</select></label>'+
       '<label>Type<select name="type"'+dis+'><option value="shell">Shell command</option><option value="bash_script"'+(c?.type==='bash_script'?' selected':'')+'>Bash script</option></select></label></div>'+
       '<label>Content<textarea name="content" rows="8" required spellcheck="false" class="mono" placeholder="Shell command or Bash script"'+dis+'>'+escapeHtml(c?.content??'')+'</textarea></label>'+
-      '<label>Level<select name="level">'+[1,2,3,4,5].map(l=>'<option value="'+l+'"'+(l===(c?.level??1)?' selected':'')+'>'+l+' — '+LEVELS[l]+'</option>').join('')+'</select></label>'+
+      '<label>Level<select name="level" required>'+(proposedLevel!==undefined?'<option value="" selected disabled>Choose the level…</option>':'')+[1,2,3,4,5].map(l=>'<option value="'+l+'"'+(proposedLevel===undefined&&l===(c?.level??1)?' selected':'')+'>'+l+' — '+LEVELS[l]+'</option>').join('')+'</select></label>'+
+      (proposedLevel!==undefined?'<p class="hint">The client proposed level '+proposedLevel+' ('+escapeHtml(LEVELS[proposedLevel]??'')+'). Decide the level yourself from what the command does.</p>':'')+
       (c?.id&&c.level===5?'<p class="hint">Moving this command off level 5 clears its execution password.</p>':'')+
       '<label class="check"><input type="checkbox" name="verifyIntegrity"'+(c?.verifyIntegrity||(c?.level??1)>=3?' checked':'')+((c?.level??1)>=3?' disabled':'')+'> Verify integrity before each run</label><p class="hint" data-verify-hint>'+verifyHint(c?.level??1)+'</p>'+
       '<label class="check"><input type="checkbox" name="showOutputOnApproval"'+(c?.showOutputOnApproval?' checked':'')+'> Show output after approval (levels 4–5)</label><p class="hint">Levels 1–3 always show their output when run from here. For levels 4–5, the approval page and Run show only the exit code unless this is on. The MCP client always gets the full result.</p>';};
@@ -299,27 +312,32 @@ async function commandsPage(reviewSuggestionId?:string){
     const verify=form.querySelector<HTMLInputElement>('input[name=verifyIntegrity]')!; if(!verify.disabled)body.verifyIntegrity=verify.checked; // levels 3–5: always on, keep the stored choice
     for(const k of ['targetId','type','content'])if(f.has(k))body[k]=f.get(k); // disabled fields are absent
     return body;};
+  /** Live look-alike warning under the Name field. */
+  const wireNameWarnings=(d:HTMLDialogElement,ownId?:string)=>{const input=d.querySelector<HTMLInputElement>('input[name=name]')!,box=d.querySelector<HTMLElement>('[data-name-warnings]')!;
+    const update=()=>{box.innerHTML=lookalikes(input.value,ownId).map(w=>'<p class="name-warning">⚠ '+escapeHtml(describeNameWarning(w))+'</p>').join('');};input.addEventListener('input',update);update();};
   mcpAccessPanel();
-  on('#new-command',()=>wireVerify(formDialog('New command',commandFields(),'Create command',async form=>{
-    await api('/api/commands',{method:'POST',body:JSON.stringify(commandBody(form))}); commandsPage();})));
+  on('#new-command',()=>{const d=formDialog('New command',commandFields(),'Create command',async form=>{
+    await api('/api/commands',{method:'POST',body:JSON.stringify(commandBody(form))}); commandsPage();});wireVerify(d);wireNameWarnings(d);});
   const reviewSuggestion=(s:any)=>{
-    const prefill={name:s.name,description:s.description,type:s.type,content:s.content,level:s.level}; // no id: a new command
+    if(s.replacesCommandId)return reviewRevision(s);
+    const prefill={name:s.name,description:s.description,type:s.type,content:s.content}; // no id: a new command; no level: the person chooses
     const intro='<div class="suggestion-note"><p><strong>Written by an MCP client ('+escapeHtml(s.clientName)+').</strong> Read the content line by line before creating it: it runs on the target exactly as written. Choose the target and level yourself.</p>'+
       (s.rationale?'<p><small>Why: '+escapeHtml(s.rationale)+'</small></p>':'')+(s.targetHint?'<p><small>Meant for: '+escapeHtml(s.targetHint)+'</small></p>':'')+
       '<p><button type="button" class="small" data-copy-review>Copy for review</button> <small>Copies it with a security-review prompt: paste that into another AI agent to check what it does and whether it hides anything malicious.</small></p></div>';
-    const dialog=formDialog('Review suggested command',intro+commandFields(prefill)+
+    const dialog=formDialog('Review suggested command',intro+commandFields(prefill,s.level)+
       '<label class="check"><input type="checkbox" name="reviewed" required> I have reviewed the content and chosen the target and level.</label>','Create command',async form=>{
       await api('/api/commands',{method:'POST',body:JSON.stringify({...commandBody(form),suggestionId:s.id})}); window.history.replaceState(null,'',location.pathname); commandsPage();});
-    wireVerify(dialog,prefill);
+    wireVerify(dialog,prefill); wireNameWarnings(dialog,s.id);
     dialog.querySelector<HTMLButtonElement>('[data-copy-review]')!.onclick=e=>copyForReview(e.currentTarget as HTMLButtonElement,s,true);};
+  const reviewRevision=(s:any)=>reviewSuggestedChange(s,cs,ts,()=>commandsPage());
   on('[data-review-suggestion]',b=>{const s=ss.find(x=>x.id===b.dataset.reviewSuggestion); if(s)reviewSuggestion(s);});
-  on('[data-copy-suggestion]',b=>{const s=ss.find(x=>x.id===b.dataset.copySuggestion); if(s)copyForReview(b as HTMLButtonElement,s,false);});
+  on('[data-copy-suggestion]',b=>{const s=ss.find(x=>x.id===b.dataset.copySuggestion); if(s)copyForReview(b as HTMLButtonElement,withCurrent(s,cs),false);});
   on('[data-dismiss-suggestion]',async b=>{if(!confirm('Dismiss this suggestion? The MCP client will see it as dismissed.'))return;
     try{await api('/api/command-suggestions/'+b.dataset.dismissSuggestion+'/dismiss',{method:'POST',body:'{}'}); commandsPage();}catch(err){alert((err as Error).message);}});
   if(reviewSuggestionId){const s=ss.find(x=>x.id===reviewSuggestionId);
     if(!s)alert('This suggestion was already reviewed, or it does not exist.'); else if(!ts.length)alert('Add an SSH target before creating commands.'); else reviewSuggestion(s);}
   on('[data-edit-command]',b=>{const c=cs.find(x=>x.id===b.dataset.editCommand); if(!c)return;
-    wireVerify(formDialog(c.commandKey?'Edit command (installed)':'Edit command',commandFields(c),'Save',async form=>{await api('/api/commands/'+c.id,{method:'PATCH',body:JSON.stringify(commandBody(form))}); commandsPage();}),c);});
+    const d=formDialog(c.commandKey?'Edit command (installed)':'Edit command',commandFields(c),'Save',async form=>{await api('/api/commands/'+c.id,{method:'PATCH',body:JSON.stringify(commandBody(form))}); commandsPage();}); wireVerify(d,c); wireNameWarnings(d,c.id);});
   on('[data-run-command]',b=>{const c=cs.find(x=>x.id===b.dataset.runCommand); if(c)runCommand({...c,targetName:targetName(c.targetId)});});
   on('[data-set-level5]',b=>{const c=cs.find(x=>x.id===b.dataset.setLevel5); if(!c)return;
     formDialog((c.hasExecutionPassword?'Change':'Set')+' execution password','<p class="hint">Level 5 commands run only after this password is entered on the confirmation page.</p><label>Password<input name="password" type="password" minlength="12" maxlength="1024" required autocomplete="new-password"></label><label>Repeat password<input name="repeat" type="password" required autocomplete="new-password"></label>','Save',async form=>{
@@ -423,6 +441,74 @@ function resultView(r:any):string{
     (r.outputHidden?'<p class="hint">Output is not shown after approval for this command (see “Show output after approval” in its settings). It is still recorded in History.</p>'
       :block('stdout',r.stdout??'','stdout')+(r.stderr?block('stderr',r.stderr,'stderr'):''));
 }
+/** For a suggested change, the command it would replace (as the review prompt shows it). */
+function withCurrent(s:any,cs:any[]):any{const c=s.replacesCommandId?cs.find(x=>x.id===s.replacesCommandId):undefined;
+  return c?{...s,current:{name:c.name,description:c.description,type:c.type,content:c.content,level:c.level,version:c.version}}:s;}
+
+/**
+ * Review of a suggested change to an existing command. The AI never saw the current script, so farcmd shows
+ * the differences. Applying it is a guided sequence, each step a separate, explicit action of the person:
+ *   1. review the diff and choose the level   2. uninstall the current capability (the command cannot run
+ *   until step 4)   3. promote the new version (the command's version goes up)   4. install it again.
+ */
+function reviewSuggestedChange(s:any,cs:any[],ts:any[],done:()=>void){
+  let c=cs.find(x=>x.id===s.replacesCommandId);
+  if(!c){openDialog('Review suggested change','<div class="danger-note"><p>The command this suggestion would change no longer exists. Dismiss the suggestion.</p></div><div class="dialog-actions"><button data-dialog-close>Close</button></div>');return;}
+  const diff=lineDiff(c.content,s.content);
+  const diffHtml=diff?'<p class="hint">'+diff.added+' line'+(diff.added===1?'':'s')+' added, '+diff.removed+' removed.</p><pre class="diff mono">'+diff.lines.map(l=>'<span class="'+(l.op==='+'?'dadd':l.op==='-'?'ddel':'dctx')+'">'+escapeHtml(l.op+' '+l.text)+'</span>').join('')+'</pre>'
+    :'<p class="hint">Rewritten too much for a line diff. Current version:</p><pre class="output mono">'+escapeHtml(c.content)+'</pre><p class="hint">Proposed version:</p><pre class="output mono">'+escapeHtml(s.content)+'</pre>';
+  const changed=(label:string,from:string,to:string)=>from===to?'':'<tr><th>'+escapeHtml(label)+'</th><td>'+escapeHtml(from)+'</td><td>'+escapeHtml(to)+'</td></tr>';
+  const fields=changed('Type',c.type==='bash_script'?'Bash script':'Shell command',s.type==='bash_script'?'Bash script':'Shell command')+changed('Description',c.description,s.description);
+  const targetName=ts.find(t=>t.id===c.targetId)?.name??'unknown target';
+  const d=openDialog('Review suggested change',
+    '<div class="danger-note"><p><strong>⚠ This changes an existing command: '+escapeHtml(c.name)+'</strong> (version '+c.version+', on '+escapeHtml(targetName)+').</p>'+
+    '<p>The new version was written by an MCP client ('+escapeHtml(s.clientName)+'). MCP clients that use this command will run the new version once it is installed. Read every changed line: a single added line is enough for a backdoor.</p>'+
+    (s.baseVersion!==c.version?'<p><strong>The command changed after this suggestion was made</strong> (suggested for version '+s.baseVersion+', now version '+c.version+'). The differences below are against the current version.</p>':'')+
+    (s.name!==c.name?'<p><small>The client calls it "'+escapeHtml(s.name)+'"; the command keeps its name.</small></p>':'')+
+    (s.rationale?'<p><small>Why: '+escapeHtml(s.rationale)+'</small></p>':'')+'</div>'+
+    (fields?'<table class="field-changes"><tr><th></th><th>Current</th><th>Proposed</th></tr>'+fields+'</table>':'')+
+    '<h3>Content changes</h3>'+diffHtml+
+    '<p><button type="button" class="small" data-copy-review>Copy for review</button> <small>Copies the current and proposed versions and the differences with a security-review prompt for another AI agent.</small></p>'+
+    '<ol class="steps">'+
+      '<li data-step="review"><strong>Review and approve.</strong><label>Level<select name="level" required><option value="" selected disabled>Choose the level…</option>'+[1,2,3,4,5].map(l=>'<option value="'+l+'">'+l+' — '+LEVELS[l]+'</option>').join('')+'</select></label>'+
+        '<p class="hint">Currently level '+c.level+'; the client proposed level '+s.level+'. Decide from what the new version does.'+(c.level===5?' Changing the content clears the level 5 execution password: set it again afterwards.':'')+'</p>'+
+        '<label class="check"><input type="checkbox" name="approved"> I have read every change and approve replacing version '+c.version+'.</label></li>'+
+      '<li data-step="uninstall"><strong>Uninstall the current version.</strong> The installed script is removed from the target; the command cannot run until you install it again. <button type="button" class="small" data-step-uninstall>Uninstall</button> <span data-status-uninstall></span></li>'+
+      '<li data-step="promote"><strong>Promote the new version.</strong> The command is updated and its version goes up, so MCP clients can see that it changed. <button type="button" class="small" data-step-promote>Promote new version</button> <span data-status-promote></span></li>'+
+      '<li data-step="install"><strong>Install it again.</strong> <button type="button" class="small primary" data-step-install>Install</button> <span data-status-install></span></li>'+
+    '</ol><p class="dialog-error" role="alert"></p><div class="dialog-actions"><button type="button" data-dialog-close>Close</button></div>');
+  d.classList.add('wide');
+  const q=<T extends HTMLElement>(sel:string)=>d.querySelector<T>(sel)!;
+  const level=q<HTMLSelectElement>('select[name=level]'), approved=q<HTMLInputElement>('input[name=approved]'), error=q('.dialog-error');
+  let promoted=false, installed=!!c.commandKey;
+  const refresh=()=>{
+    const ok=approved.checked&&level.value!=='';
+    level.disabled=promoted; approved.disabled=promoted;
+    q<HTMLButtonElement>('[data-step-uninstall]').disabled=!ok||!installed||promoted;
+    q('[data-status-uninstall]').textContent=installed&&!promoted?'':'✓ Not installed';
+    q<HTMLButtonElement>('[data-step-promote]').disabled=!ok||installed||promoted;
+    q('[data-status-promote]').textContent=promoted?'✓ Now version '+c.version:'';
+    q<HTMLButtonElement>('[data-step-install]').disabled=!promoted||installed;
+    q('[data-status-install]').textContent=promoted&&installed?'✓ Installed':'';
+  };
+  const step=async(action:()=>Promise<void>)=>{error.textContent='';try{await action();}catch(err){error.textContent=(err as Error).message;}refresh();};
+  level.onchange=refresh; approved.onchange=refresh;
+  q<HTMLButtonElement>('[data-copy-review]').onclick=e=>copyForReview(e.currentTarget as HTMLButtonElement,withCurrent(s,cs),true);
+  q<HTMLButtonElement>('[data-step-uninstall]').onclick=()=>step(async()=>{
+    if(!confirm('Uninstall "'+c.name+'"? It cannot run until the new version is installed.'))return;
+    const r=await api('/api/commands/'+c.id+'/key',{method:'DELETE'}); installed=false;
+    if(r.remoteCleanupPending)alert('The capability was removed locally and recorded for remote cleanup when a master key is available.');});
+  q<HTMLButtonElement>('[data-step-promote]').onclick=()=>step(async()=>{
+    const r=await api('/api/commands/'+c.id,{method:'PATCH',body:JSON.stringify({type:s.type,content:s.content,description:s.description,level:Number(level.value),suggestionId:s.id,expectedVersion:c.version})});
+    c=r.command; promoted=true;});
+  q<HTMLButtonElement>('[data-step-install]').onclick=()=>step(async()=>{
+    if(!confirm('Install version '+c.version+' of "'+c.name+'" on the target?'))return;
+    await api('/api/commands/'+c.id+'/key',{method:'POST',body:'{}'}); installed=true;
+    window.history.replaceState(null,'',location.pathname);});
+  d.addEventListener('close',()=>{if(promoted)window.history.replaceState(null,'',location.pathname);done();});
+  refresh();
+}
+
 /**
  * Copies a suggestion with a security-review prompt (review-prompt.ts) for another AI agent. Where the clipboard
  * is unavailable (e.g. plain HTTP), the text is shown to copy by hand: inline in the review dialog, else in a dialog.
