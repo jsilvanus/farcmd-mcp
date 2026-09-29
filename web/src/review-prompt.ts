@@ -37,7 +37,7 @@ export function securityReviewPrompt(s:ReviewedSuggestion,code=randomMarkerCode(
     ?'You are a security reviewer. An AI assistant proposed a CHANGE to an existing command in farcmd, a tool that runs predefined commands over SSH on a server. The command already runs in production; a person will decide whether to replace it with the proposed version, based on your review. Review the proposed version as a whole, and pay special attention to what changes.'
     :'You are a security reviewer. An AI assistant proposed the command below for farcmd, a tool that runs predefined commands over SSH on a server. A person will decide whether to install it, based on your review.';
   const current=c?[
-    'CURRENT VERSION (version '+c.version+', installed and trusted so far):',
+    'CURRENT VERSION (version '+c.version+', in use now):',
     'Name: '+c.name,'Description: '+(c.description||'(none)'),'Level: '+c.level+' ('+(LEVEL_NAMES[c.level]??'unknown')+')','Type: '+typeName(c.type),
     'Content:',fence+language(c.type),c.content,fence,'',
     'PROPOSED VERSION:',

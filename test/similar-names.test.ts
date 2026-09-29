@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { editDistance, jaro, jaroWinkler, nameTails, nameWarnings, normalizeName } from '../web/src/similar-names.js';
+import { describeNameWarning, editDistance, jaro, jaroWinkler, nameTails, nameWarnings, normalizeName } from '../web/src/similar-names.js';
 
 const EXISTING=[{id:'1',name:'cook_coffee'},{id:'2',name:'saarnavideo: redeploy'},{id:'3',name:'df'}];
 const kinds=(name:string,ownId?:string)=>nameWarnings(name,EXISTING,ownId).map(w=>w.kind+('name' in w?':'+w.name:''));
@@ -42,6 +42,25 @@ test('Jaro-Winkler on the name tails: typos in a family are flagged, siblings ar
 test('warnings say whether the look-alike is a command or another pending suggestion',()=>{
   const w=nameWarnings('cok_coffee',[{id:'1',name:'cook_coffee',source:'suggestion'}]);
   assert.deepEqual(w,[{kind:'lookalike',name:'cook_coffee',source:'suggestion'}]);
+});
+
+test('pending suggestions warn about each other, never about themselves',()=>{
+  const pool=[{id:'c1',name:'cook_coffee',source:'command' as const},{id:'s1',name:'cok_coffee',source:'suggestion' as const},{id:'s2',name:'cok_cofee',source:'suggestion' as const},{id:'s3',name:'restart_backend',source:'suggestion' as const}];
+  const others=(id:string)=>{const own=pool.find(e=>e.id===id)!;return nameWarnings(own.name,pool,id).map(w=>'name' in w?w.source+':'+w.name:w.kind);};
+  assert.deepEqual(others('s1'),['command:cook_coffee','suggestion:cok_cofee']);
+  assert.deepEqual(others('s2'),['suggestion:cok_coffee'],'two typos away from the command, one from the other suggestion');
+  assert.deepEqual(others('c1'),['suggestion:cok_coffee'],'the command is warned about the suggestion too');
+  assert.deepEqual(others('s3'),[]);
+  // Two suggestions with the same name: a duplicate of each other, but each skips its own entry.
+  const twins=[{id:'a',name:'deploy',source:'suggestion' as const},{id:'b',name:'Deploy',source:'suggestion' as const}];
+  assert.deepEqual(nameWarnings('deploy',twins,'a'),[{kind:'duplicate',name:'Deploy',source:'suggestion'}]);
+});
+
+test('describeNameWarning names the other entry and its source',()=>{
+  assert.equal(describeNameWarning({kind:'duplicate',name:'cook_coffee',source:'command'}),'Same name as the existing command "cook_coffee".');
+  assert.equal(describeNameWarning({kind:'lookalike',name:'cok_coffee',source:'suggestion'}),'Looks like the pending suggestion "cok_coffee". MCP clients and people can mistake one for the other.');
+  assert.equal(describeNameWarning({kind:'lookalike',name:'cook_coffee',source:'command'}),'Looks like the existing command "cook_coffee". MCP clients and people can mistake one for the other.');
+  assert.match(describeNameWarning({kind:'unicode'}),/non-ASCII characters/);
 });
 
 test('Jaro and Jaro-Winkler reference values',()=>{

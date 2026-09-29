@@ -499,7 +499,7 @@ function reviewSuggestedChange(s:any,cs:any[],ts:any[],done:()=>void){
     const r=await api('/api/commands/'+c.id+'/key',{method:'DELETE'}); installed=false;
     if(r.remoteCleanupPending)alert('The capability was removed locally and recorded for remote cleanup when a master key is available.');});
   q<HTMLButtonElement>('[data-step-promote]').onclick=()=>step(async()=>{
-    const r=await api('/api/commands/'+c.id,{method:'PATCH',body:JSON.stringify({type:s.type,content:s.content,description:s.description,level:Number(level.value),suggestionId:s.id})});
+    const r=await api('/api/commands/'+c.id,{method:'PATCH',body:JSON.stringify({type:s.type,content:s.content,description:s.description,level:Number(level.value),suggestionId:s.id,expectedVersion:c.version})});
     c=r.command; promoted=true;});
   q<HTMLButtonElement>('[data-step-install]').onclick=()=>step(async()=>{
     if(!confirm('Install version '+c.version+' of "'+c.name+'" on the target?'))return;

@@ -208,20 +208,27 @@ test('a suggested change to an existing command: only for commands the client ca
     assert.equal((await f.call('list_command_suggestions')).data.suggestions[0].replacesCommandId,visible.id);
     // It can neither become a new command nor be applied to another one.
     assert.equal((await f.web('POST','/api/commands',{name:'x',type:'shell',content:'true',targetId:f.targetId,level:1,suggestionId:id})).statusCode,400);
-    assert.equal((await f.web('PATCH','/api/commands/'+hidden.id,{content:change.content,suggestionId:id})).statusCode,400);
+    assert.equal((await f.web('PATCH','/api/commands/'+hidden.id,{content:change.content,suggestionId:id,expectedVersion:1})).statusCode,400);
     // While the capability is installed the content is locked: uninstall first. The suggestion stays pending.
     const now=Date.now();
     new SqliteCommandInstallationStore(f.db).create({id:randomUUID(),userId:f.user.id,commandId:visible.id,targetId:f.targetId,masterKeyId:'k',encryptedPrivateKey:'x',publicKey:'ssh-ed25519 AAAA',fingerprint:'SHA256:x',remoteScriptPath:'/p',authorizedKeyLine:'l',installedAt:now,createdAt:now,updatedAt:now});
-    assert.equal((await f.web('PATCH','/api/commands/'+visible.id,{type:'bash_script',content:change.content,level:3,suggestionId:id})).statusCode,409);
+    assert.equal((await f.web('PATCH','/api/commands/'+visible.id,{type:'bash_script',content:change.content,level:3,suggestionId:id,expectedVersion:1})).statusCode,409);
     assert.equal((await f.web('GET','/api/command-suggestions')).json().suggestions.length,1);
     f.db.prepare('DELETE FROM command_installations WHERE command_id=?').run(visible.id); // what Uninstall does locally
-    const applied=await f.web('PATCH','/api/commands/'+visible.id,{type:'bash_script',content:change.content,level:3,suggestionId:id});
+    // The person approves the differences against the version they saw: a stale or missing version is refused.
+    await f.web('PATCH','/api/commands/'+visible.id,{content:'cd /srv\n./deploy.sh --fast'}); // version 2, changed after the suggestion
+    for(const expectedVersion of [1,undefined,'2']){
+      const stale=await f.web('PATCH','/api/commands/'+visible.id,{type:'bash_script',content:change.content,level:3,suggestionId:id,expectedVersion});
+      assert.equal(stale.statusCode,409,String(expectedVersion)); assert.match(stale.json().error,/changed since you opened this review/);
+    }
+    assert.equal((f.db.prepare('SELECT content FROM commands WHERE id=?').get(visible.id) as any).content,'cd /srv\n./deploy.sh --fast');
+    const applied=await f.web('PATCH','/api/commands/'+visible.id,{type:'bash_script',content:change.content,level:3,suggestionId:id,expectedVersion:2});
     assert.equal(applied.statusCode,200,applied.body);
-    assert.equal(applied.json().command.version,2); assert.equal(applied.json().command.level,3,'the person chose the level');
+    assert.equal(applied.json().command.version,3); assert.equal(applied.json().command.level,3,'the person chose the level');
     assert.equal(applied.json().command.name,'deploy','the command keeps its name');
     const after=(f.db.prepare('SELECT status,command_id FROM command_suggestions WHERE id=?').get(id) as any);
     assert.equal(after.status,'accepted'); assert.equal(after.command_id,visible.id);
-    assert.equal((await f.web('PATCH','/api/commands/'+visible.id,{content:'true',suggestionId:id})).statusCode,409,'applied once');
+    assert.equal((await f.web('PATCH','/api/commands/'+visible.id,{content:'true',suggestionId:id,expectedVersion:3})).statusCode,409,'applied once');
     const audited=f.db.prepare("SELECT details FROM security_events WHERE event='command.update' AND outcome='success' ORDER BY seq DESC").get() as any;
     assert.match(audited.details,new RegExp(id));
   }finally{f.done();}
