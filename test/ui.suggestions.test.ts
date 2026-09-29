@@ -46,7 +46,8 @@ test('web UI: review a suggested command from its link, create it, dismiss anoth
   const grants=new SqliteOAuthGrantStore(db); grants.upsert(user.id,'https://claude.ai','Claude',[1,2,3],false);
   const browser=await chromium.launch(process.env.FARCMD_CHROMIUM?{executablePath:process.env.FARCMD_CHROMIUM}:{});
   try{
-    const page=await browser.newPage(); const problems:string[]=[];
+    const context=await browser.newContext(); await context.grantPermissions(['clipboard-read','clipboard-write'],{origin:address});
+    const page=await context.newPage(); const problems:string[]=[];
     page.on('pageerror',e=>problems.push('pageerror: '+e.message));
     page.on('console',m=>{if(m.type()==='error')problems.push('console: '+m.text());});
     page.on('dialog',d=>d.accept());
@@ -61,6 +62,11 @@ test('web UI: review a suggested command from its link, create it, dismiss anoth
     assert.equal(await dialog.locator('select[name=level]').inputValue(),'3');
     await page.locator('.row',{hasText:'wipe everything'}).waitFor(); // both are listed behind the dialog
     if(process.env.FARCMD_UI_SCREENSHOTS)await page.screenshot({path:join(process.env.FARCMD_UI_SCREENSHOTS,'suggestion-review.png'),fullPage:true});
+    // Copy for review: the suggestion with a security-review prompt, to paste into another agent.
+    await dialog.getByRole('button',{name:'Copy for review'}).click();
+    await dialog.getByRole('button',{name:'Copied'}).waitFor();
+    const copied=await page.evaluate(()=>navigator.clipboard.readText());
+    for(const part of ['Name: saarnavideo: redeploy',redeploy.content,'Suggested by MCP client: Claude','untrusted data','DO NOT INSTALL'])assert.ok(copied.includes(part),part);
     // The person chooses target and level; the review checkbox is required.
     await dialog.locator('select[name=targetId]').selectOption(prodId); await dialog.locator('select[name=level]').selectOption('4');
     await dialog.getByRole('button',{name:'Create command'}).click();
@@ -75,6 +81,11 @@ test('web UI: review a suggested command from its link, create it, dismiss anoth
     const command=db.prepare('SELECT id,target_id,level,content FROM commands').get() as any;
     assert.equal(command.target_id,prodId); assert.equal(command.level,4); assert.equal(command.content,redeploy.content);
     assert.equal(suggestions.get(user.id,redeploy.id)?.status,'accepted'); assert.equal(suggestions.get(user.id,redeploy.id)?.commandId,command.id);
+    // Without a usable clipboard (e.g. plain HTTP) the text is shown to copy by hand.
+    await page.evaluate(()=>{navigator.clipboard.writeText=()=>Promise.reject(new Error('denied'));});
+    await page.locator('.row',{hasText:'wipe everything'}).getByRole('button',{name:'Copy for review'}).click();
+    assert.match(await dialog.locator('textarea.review-copy').inputValue(),/rm -rf \/srv[\s\S]*DO NOT INSTALL|DO NOT INSTALL[\s\S]*rm -rf \/srv/);
+    await dialog.getByRole('button',{name:'Close'}).click(); await dialog.waitFor({state:'detached'});
     // Dismiss the other one from the list.
     await page.locator('.row',{hasText:'wipe everything'}).getByRole('button',{name:'Dismiss'}).click();
     await page.getByRole('heading',{name:/Suggested by MCP clients/}).waitFor({state:'detached'});

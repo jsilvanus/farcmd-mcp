@@ -72,3 +72,4 @@ article+article{margin-top:1.6rem}
 table.audit td:last-child{max-width:none;min-width:22ch}table.audit td{overflow-wrap:anywhere}
 .audit-details summary{cursor:pointer;color:#3c4043}.audit-details[open] summary{margin-bottom:.25rem}
 table.audit td:nth-child(3),table.audit td:nth-child(4){white-space:nowrap;overflow-wrap:normal}
+.review-copy{width:100%;font-size:.8rem}

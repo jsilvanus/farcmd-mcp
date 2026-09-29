@@ -1,4 +1,5 @@
 import './style.css';
+import { securityReviewPrompt } from './review-prompt.js';
 
 type User = { id:string; name:string; email?:string; createdAt:number };
 
@@ -268,7 +269,7 @@ async function commandsPage(reviewSuggestionId?:string){
   const suggestionRows=ss.map(s=>row(
     '<strong>'+escapeHtml(s.name)+'</strong>'+(s.description?'<small>'+escapeHtml(s.description)+'</small>':'')+
     '<div class="pills">'+pill('Level '+s.level+' · '+LEVELS[s.level],s.level>=5?'bad':s.level>=4?'warn':'muted')+pill(s.type==='bash_script'?'Bash script':'Shell')+pill('From '+s.clientName)+pill(new Date(s.createdAt).toLocaleString())+'</div>',
-    '<button class="small primary" data-review-suggestion="'+escapeHtml(s.id)+'"'+(ts.length?'':' disabled title="Add an SSH target first"')+'>Review</button><button class="small danger" data-dismiss-suggestion="'+escapeHtml(s.id)+'">Dismiss</button>'));
+    '<button class="small" data-copy-suggestion="'+escapeHtml(s.id)+'" title="Copies the suggestion with a security-review prompt, to paste into another AI agent">Copy for review</button><button class="small primary" data-review-suggestion="'+escapeHtml(s.id)+'"'+(ts.length?'':' disabled title="Add an SSH target first"')+'>Review</button><button class="small danger" data-dismiss-suggestion="'+escapeHtml(s.id)+'">Dismiss</button>'));
   shell('Commands','<div id="mcp-access"></div>'+
     (ss.length?'<article>'+sectionHead('Suggested by MCP clients ('+ss.length+')','')+
       '<p class="hint">An AI client proposed these commands. Nothing has been created: review one to create it as a command (then Install and Run as usual), or dismiss it.</p>'+
@@ -304,11 +305,15 @@ async function commandsPage(reviewSuggestionId?:string){
   const reviewSuggestion=(s:any)=>{
     const prefill={name:s.name,description:s.description,type:s.type,content:s.content,level:s.level}; // no id: a new command
     const intro='<div class="suggestion-note"><p><strong>Written by an MCP client ('+escapeHtml(s.clientName)+').</strong> Read the content line by line before creating it: it runs on the target exactly as written. Choose the target and level yourself.</p>'+
-      (s.rationale?'<p><small>Why: '+escapeHtml(s.rationale)+'</small></p>':'')+(s.targetHint?'<p><small>Meant for: '+escapeHtml(s.targetHint)+'</small></p>':'')+'</div>';
-    wireVerify(formDialog('Review suggested command',intro+commandFields(prefill)+
+      (s.rationale?'<p><small>Why: '+escapeHtml(s.rationale)+'</small></p>':'')+(s.targetHint?'<p><small>Meant for: '+escapeHtml(s.targetHint)+'</small></p>':'')+
+      '<p><button type="button" class="small" data-copy-review>Copy for review</button> <small>Copies it with a security-review prompt: paste that into another AI agent to check what it does and whether it hides anything malicious.</small></p></div>';
+    const dialog=formDialog('Review suggested command',intro+commandFields(prefill)+
       '<label class="check"><input type="checkbox" name="reviewed" required> I have reviewed the content and chosen the target and level.</label>','Create command',async form=>{
-      await api('/api/commands',{method:'POST',body:JSON.stringify({...commandBody(form),suggestionId:s.id})}); window.history.replaceState(null,'',location.pathname); commandsPage();}),prefill);};
+      await api('/api/commands',{method:'POST',body:JSON.stringify({...commandBody(form),suggestionId:s.id})}); window.history.replaceState(null,'',location.pathname); commandsPage();});
+    wireVerify(dialog,prefill);
+    dialog.querySelector<HTMLButtonElement>('[data-copy-review]')!.onclick=e=>copyForReview(e.currentTarget as HTMLButtonElement,s,true);};
   on('[data-review-suggestion]',b=>{const s=ss.find(x=>x.id===b.dataset.reviewSuggestion); if(s)reviewSuggestion(s);});
+  on('[data-copy-suggestion]',b=>{const s=ss.find(x=>x.id===b.dataset.copySuggestion); if(s)copyForReview(b as HTMLButtonElement,s,false);});
   on('[data-dismiss-suggestion]',async b=>{if(!confirm('Dismiss this suggestion? The MCP client will see it as dismissed.'))return;
     try{await api('/api/command-suggestions/'+b.dataset.dismissSuggestion+'/dismiss',{method:'POST',body:'{}'}); commandsPage();}catch(err){alert((err as Error).message);}});
   if(reviewSuggestionId){const s=ss.find(x=>x.id===reviewSuggestionId);
@@ -417,6 +422,18 @@ function resultView(r:any):string{
   return '<div class="pills">'+status+pill((r.durationMs/1000).toFixed(r.durationMs<10_000?2:1)+' s')+(r.truncated?pill('Output truncated','warn'):'')+'</div>'+
     (r.outputHidden?'<p class="hint">Output is not shown after approval for this command (see “Show output after approval” in its settings). It is still recorded in History.</p>'
       :block('stdout',r.stdout??'','stdout')+(r.stderr?block('stderr',r.stderr,'stderr'):''));
+}
+/**
+ * Copies a suggestion with a security-review prompt (review-prompt.ts) for another AI agent. Where the clipboard
+ * is unavailable (e.g. plain HTTP), the text is shown to copy by hand: inline in the review dialog, else in a dialog.
+ */
+async function copyForReview(button:HTMLButtonElement,s:any,inline:boolean){
+  const text=securityReviewPrompt(s);
+  try{await navigator.clipboard.writeText(text);button.textContent='Copied';return;}catch{}
+  const box='<textarea class="mono review-copy" rows="10" readonly aria-label="Text to copy for review">'+escapeHtml(text)+'</textarea>';
+  if(inline){button.closest('p')!.insertAdjacentHTML('afterend','<p class="hint">Select all and copy:</p>'+box);}
+  else openDialog('Copy for review','<p class="hint">Copy this text and paste it into another AI agent.</p>'+box+'<div class="dialog-actions"><button data-dialog-close>Close</button></div>');
+  document.querySelector<HTMLTextAreaElement>('textarea.review-copy')?.select();
 }
 function bindCopyButtons(root:ParentNode){root.querySelectorAll<HTMLButtonElement>('[data-copy-output]').forEach(b=>b.onclick=async()=>{const text=b.closest('.output-block')?.querySelector('pre')?.textContent??'';try{await navigator.clipboard.writeText(text);b.textContent='Copied';}catch{b.textContent='Copy failed';}});}
 function resultDialog(c:any,r:any){const d=openDialog(c.name,resultView(r)+'<div class="dialog-actions"><button data-dialog-close>Close</button></div>');d.classList.add('wide');bindCopyButtons(d);}
