@@ -191,8 +191,39 @@ Run it under systemd (or similar) as a dedicated unprivileged user, and make `.e
 | `FARCMD_SSH_MAX_CONCURRENT`, `FARCMD_SSH_MAX_PER_TARGET` | – | Concurrent SSH executions in total (8) and per target (2). |
 | `FARCMD_MCP_EXECUTIONS_PER_MINUTE` | – | New MCP executions per user and client per minute (default 30, `0` = off). |
 | `FARCMD_VERSION` | – | Image tag used by the compose files (default `1`). |
+| `OIDC_ISSUER` | – | Turns on single sign-on through an OpenID Connect provider (e.g. authentik): the issuer URL exactly as the provider publishes it. Unset = no single sign-on option anywhere. See [Single sign-on (OIDC)](#single-sign-on-oidc). |
+| `OIDC_CLIENT_ID` | with `OIDC_ISSUER` | Client ID of farcmd at the provider. |
+| `OIDC_CLIENT_SECRET` | – | Client secret (confidential client). Unset = public client; PKCE is always used. |
+| `OIDC_SCOPES` | – | Default `openid email profile` (must include `openid`). |
+| `OIDC_BUTTON_LABEL` | – | Button text, default `Sign in with single sign-on`. |
+| `OIDC_CREATE_USERS` | – | `true` creates a farcmd account for a provider user who has none (default `false`: accounts are linked, not created). |
+| `OIDC_TRUST_EMAIL` | – | `true` links by email even when the provider does not mark it verified (default `false`). |
 
 In production, farcmd refuses to start when `MCP_PUBLIC_URL` is missing, not `https://` or has a path, or when the development bootstrap `MCP_DEFAULT_USER_PASSWORD` is set.
+
+### Single sign-on (OIDC)
+
+farcmd can let people sign in through an OpenID Connect provider such as authentik, both in the web UI and on the
+page an MCP client opens to authorize itself. farcmd is only a **Relying Party** there: the provider checks who the
+person is, and farcmd keeps issuing its own web sessions, OAuth grants and `/mcp` access tokens, with the same
+per-client consent (visible levels, suggestions). farcmd never issues ID tokens. Password sign-in keeps working next
+to the single sign-on button. Without `OIDC_ISSUER` there is no button and `/oidc/*` does not exist.
+
+authentik setup:
+
+1. Applications → Providers → create an **OAuth2/OpenID Provider**: client type *Confidential*, redirect URI
+   `<MCP_PUBLIC_URL>/oidc/callback` (strict), a signing key selected (ID tokens are then RS256), scopes `openid`,
+   `email`, `profile`.
+2. Create an **Application** for that provider; its policy bindings decide who may sign in to farcmd.
+3. Set `OIDC_ISSUER` to the provider's *OpenID Configuration Issuer* (`https://auth.example.org/application/o/<slug>/`,
+   trailing slash included), `OIDC_CLIENT_ID` and `OIDC_CLIENT_SECRET` from the provider page.
+
+On the first sign-in, the provider identity (issuer + subject) is linked to the farcmd account with the same email if
+the provider marks the email verified (`email_verified`; set `OIDC_TRUST_EMAIL=true` if your provider does not send it
+and people cannot change their own email there). Later sign-ins use the link, so changing the email later is fine.
+With no matching account the sign-in is refused, unless `OIDC_CREATE_USERS=true`. Accounts created that way have no
+password and sign in only through the provider. Disabled accounts are refused either way. Sign-ins are audited as
+`auth.oidc_login` (web) and `oauth.login` with `method: oidc` (MCP clients).
 
 ### Backups and upgrades
 

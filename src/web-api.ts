@@ -34,7 +34,7 @@ function confirmationRateLimit(key:string):boolean{return rateLimit(key,5,15*60_
 function publicUser(user:{id:string;name:string;email?:string;createdAt:number}) {
   return {id:user.id,name:user.name,email:user.email,createdAt:user.createdAt};
 }
-function cookieOptions() {
+export function webSessionCookieOptions() {
   return {httpOnly:true,secure:process.env.NODE_ENV==='production',sameSite:'lax' as const,path:'/',maxAge:WEB_SESSION_LIFETIME_MS/1000};
 }
 /** Header the web UI sends on every API call. A cross-site page cannot set it without a CORS preflight, which farcmd never grants. */
@@ -93,7 +93,9 @@ function auditDetails(body:unknown,query:unknown):Record<string,unknown>{
   return details;
 }
 
-export async function mountWebApi(app:FastifyInstance, users:UserStore, sessionStore:AuthStore&WebSessionStore&{getDatabase():DatabaseSync}, publicUrl=process.env.MCP_PUBLIC_URL ?? `http://localhost:${process.env.PORT ?? '5999'}`): Promise<void> {
+export interface WebApiOptions { /** OIDC_BUTTON_LABEL when OIDC sign-in is configured (GET /oidc/login); the web UI shows no OIDC option otherwise. */ oidcButtonLabel?:string; }
+
+export async function mountWebApi(app:FastifyInstance, users:UserStore, sessionStore:AuthStore&WebSessionStore&{getDatabase():DatabaseSync}, publicUrl=process.env.MCP_PUBLIC_URL ?? `http://localhost:${process.env.PORT ?? '5999'}`, options:WebApiOptions={}): Promise<void> {
   const expectedOrigin=new URL(publicUrl).origin;
   app.addHook('preHandler', async (request,reply) => {
     if (['POST','PATCH','PUT','DELETE'].includes(request.method) && request.url.startsWith('/api/')) {
@@ -106,7 +108,7 @@ export async function mountWebApi(app:FastifyInstance, users:UserStore, sessionS
   const audit=new AuditLog(sshDb);
   const settings=new SqliteSettingsStore(sshDb);
   const mcpAccess=new McpAccessPolicy(sshDb);
-  app.get('/api/auth/config',async()=>({registrationEnabled:settings.registrationEnabled()}));
+  app.get('/api/auth/config',async()=>({registrationEnabled:settings.registrationEnabled(),...(options.oidcButtonLabel?{oidc:{label:options.oidcButtonLabel,url:'/oidc/login'}}:{})}));
   // Audit trail for every state-changing (and sensitive read) web API call. The acting user is resolved
   // from the session before the handler runs, so logout and account deletion are attributed correctly.
   // The session is resolved once here and reused by the auth hook below.
@@ -372,7 +374,7 @@ export async function mountWebApi(app:FastifyInstance, users:UserStore, sessionS
     if(!(await verifyPassword(user?.passwordHash,password))) return reply.code(401).send({error:'Invalid email or password'});
     if(!isActiveUser(user)) return reply.code(403).send({error:'This account is disabled.'});
     const token=sessions.create(user.id);
-    reply.setCookie('farcmd_session',token,cookieOptions());
+    reply.setCookie('farcmd_session',token,webSessionCookieOptions());
     return {user:publicUser(user)};
   });
   app.post('/api/auth/logout',async (request,reply)=>{
@@ -394,7 +396,7 @@ export async function mountWebApi(app:FastifyInstance, users:UserStore, sessionS
     if(users.getUserByEmail(email)) return reply.code(409).send({error:'An account with that email already exists'});
     const user={id:crypto.randomUUID(),name,email,passwordHash:await hashPassword(password),createdAt:Date.now()};
     users.createUser(user); request.auditUserId=user.id;
-    const token=sessions.create(user.id); reply.setCookie('farcmd_session',token,cookieOptions());
+    const token=sessions.create(user.id); reply.setCookie('farcmd_session',token,webSessionCookieOptions());
     return reply.code(201).send({user:publicUser(user)});
   });
   app.patch('/api/account',async (request,reply)=>{

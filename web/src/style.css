@@ -79,3 +79,4 @@ pre.diff{max-height:24rem;overflow:auto;padding:.5rem;border-radius:8px;backgrou
 .dadd{background:#e6f4ea;color:#137333}.ddel{background:#fce8e6;color:#b3261e;text-decoration:line-through}.dctx{color:#5f6368}
 table.field-changes{font-size:.85rem;border-collapse:collapse;margin:.5rem 0}table.field-changes th,table.field-changes td{padding:.2rem .5rem;text-align:left;vertical-align:top}
 ol.steps li{margin:.6rem 0}ol.steps li label{margin-top:.3rem}
+a.button{display:inline-block;padding:.65rem 1rem;border-radius:7px;background:#1a73e8;color:#fff;text-decoration:none}a.button:hover{background:#1765cc}

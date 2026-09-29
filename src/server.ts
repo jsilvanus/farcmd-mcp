@@ -20,8 +20,11 @@ import { contentSecurityPolicy } from './csp.js';
 import { masterKey } from './crypto-at-rest.js';
 import { hashPassword } from './login-rate-limit.js';
 import { VERSION } from './version.js';
+import { OidcRelyingParty, oidcSettings } from './oidc.js';
+import { mountOidc } from './oidc-routes.js';
 
 const problems=productionConfigProblems(process.env);
+const oidc=oidcSettings(process.env); // validates OIDC_* at startup; undefined when OIDC_ISSUER is unset
 if(problems.length)throw new Error('Refusing to start with an unsafe production configuration:\n- '+problems.join('\n- '));
 executionLimits(); // validates FARCMD_SSH_MAX_* and FARCMD_MCP_EXECUTIONS_PER_MINUTE at startup
 const port=Number(process.env.PORT??'5999');
@@ -49,10 +52,12 @@ const app=Fastify(options);
 const production=process.env.NODE_ENV==='production';
 const defaultCsp=contentSecurityPolicy();
 app.addHook('onSend',async(_request,reply,payload)=>{reply.header('X-Content-Type-Options','nosniff').header('X-Frame-Options','DENY').header('Referrer-Policy','no-referrer');if(production){reply.header('Strict-Transport-Security','max-age=31536000; includeSubDomains');if(!reply.hasHeader('Content-Security-Policy'))reply.header('Content-Security-Policy',defaultCsp);}return payload;});
-await app.register(formbody);await app.register(cookie);await mountWebApi(app,users,store,publicUrl);
+const oidcButtonLabel=oidc?.buttonLabel;
+await app.register(formbody);await app.register(cookie);await mountWebApi(app,users,store,publicUrl,oidcButtonLabel?{oidcButtonLabel}:{});
 if(production)await app.register(fastifyStatic,{root:fileURLToPath(new URL('./web/',import.meta.url)),prefix:'/'});
 await mountOAuthMetadata(app,publicUrl);
-await mountAuthorizationServer(app,publicUrl,publicUrl+'/mcp',secret,store,users);
+await mountAuthorizationServer(app,publicUrl,publicUrl+'/mcp',secret,store,users,oidcButtonLabel?{oidcButtonLabel}:{});
+if(oidc)await mountOidc(app,new OidcRelyingParty(oidc,publicUrl+'/oidc/callback',store.getDatabase()),users,store,publicUrl);
 await mountMcpHttp(app,{connector:new FarcmdConnectorImpl(store.getDatabase(),publicUrl),publicUrl,jwtSecret:secret,resource:publicUrl+'/mcp',isUserActive:id=>isActiveUser(users.getUser(id))});
 app.get('/health',{logLevel:'silent'},async()=>({ok:true}));
 app.get('/',async(_request,reply)=>{if(production)return reply.sendFile('index.html');return {name:'farcmd-mcp',version:VERSION,mcp:'/mcp',web:'/'};});

@@ -32,6 +32,13 @@ openssl rand -base64 32   # JWT_SECRET — signs OAuth access tokens
 | `FARCMD_MAX_OUTPUT_BYTES` | – | Captured stdout/stderr per execution (default 262144). |
 | `FARCMD_SSH_MAX_CONCURRENT`, `FARCMD_SSH_MAX_PER_TARGET` | – | Concurrent SSH executions in total (default 8) and per target (default 2); over the limit, calls are refused. |
 | `FARCMD_MCP_EXECUTIONS_PER_MINUTE` | – | New MCP executions per user and OAuth client per minute (default 30, `0` = no limit). |
+| `OIDC_ISSUER` | – | Turns on single sign-on through an OpenID Connect provider (e.g. authentik): the issuer URL exactly as the provider publishes it. Unset = no single sign-on option anywhere. See the README section *Single sign-on (OIDC)*. |
+| `OIDC_CLIENT_ID` | with `OIDC_ISSUER` | Client ID of farcmd at the provider. |
+| `OIDC_CLIENT_SECRET` | – | Client secret (confidential client). Unset = public client; PKCE is always used. |
+| `OIDC_SCOPES` | – | Default `openid email profile` (must include `openid`). |
+| `OIDC_BUTTON_LABEL` | – | Button text, default `Sign in with single sign-on`. |
+| `OIDC_CREATE_USERS` | – | `true` creates a farcmd account for a provider user who has none (default `false`: accounts are linked, not created). |
+| `OIDC_TRUST_EMAIL` | – | `true` links by email even when the provider does not mark it verified (default `false`). |
 
 In production the server refuses to start with a missing or non-`https` `MCP_PUBLIC_URL`, with a
 URL that has a path, or with the development bootstrap `MCP_DEFAULT_USER_PASSWORD` set.
