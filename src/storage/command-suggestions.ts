@@ -12,9 +12,11 @@ export interface CommandSuggestionRecord {
   name:string; description:string; type:CommandType; content:string; level:CommandLevel;
   /** Free text from the client about where the command should run; the person picks the actual target. */
   targetHint:string; rationale:string;
+  /** A revision: the existing command this would replace (its name and target stay), and its version when suggested. */
+  replacesCommandId?:string; baseVersion?:number;
   status:SuggestionStatus; commandId?:string; createdAt:number; resolvedAt?:number;
 }
-export interface SuggestionInput { name:string; description:string; type:CommandType; content:string; level:CommandLevel; targetHint:string; rationale:string; }
+export interface SuggestionInput { name:string; description:string; type:CommandType; content:string; level:CommandLevel; targetHint:string; rationale:string; replacesCommandId?:string; }
 
 /** Open suggestions per user; a client cannot flood the review list. */
 export const MAX_PENDING_SUGGESTIONS=50;
@@ -35,13 +37,14 @@ export function validateSuggestion(s:SuggestionInput):string|undefined{
 export function migrateCommandSuggestions(db:DatabaseSync):void{
   db.exec('CREATE TABLE IF NOT EXISTS command_suggestions (id TEXT PRIMARY KEY,user_id TEXT NOT NULL,client_id TEXT NOT NULL,client_name TEXT NOT NULL,name TEXT NOT NULL,description TEXT NOT NULL,type TEXT NOT NULL,content TEXT NOT NULL,level INTEGER NOT NULL,target_hint TEXT NOT NULL,rationale TEXT NOT NULL,status TEXT NOT NULL,command_id TEXT,created_at INTEGER NOT NULL,resolved_at INTEGER);'+
     'CREATE INDEX IF NOT EXISTS command_suggestions_user_status ON command_suggestions(user_id,status,created_at)');
+  for(const column of ['replaces_command_id TEXT','base_version INTEGER'])try{db.exec('ALTER TABLE command_suggestions ADD COLUMN '+column);}catch{}
 }
 
-const COLUMNS='id,user_id,client_id,client_name,name,description,type,content,level,target_hint,rationale,status,command_id,created_at,resolved_at';
+const COLUMNS='id,user_id,client_id,client_name,name,description,type,content,level,target_hint,rationale,status,command_id,created_at,resolved_at,replaces_command_id,base_version';
 export class SqliteCommandSuggestionStore {
   constructor(private readonly db:DatabaseSync){ migrateCommandSuggestions(db); }
   create(r:CommandSuggestionRecord):void{
-    this.db.prepare('INSERT INTO command_suggestions ('+COLUMNS+') VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run(r.id,r.userId,r.clientId,r.clientName,r.name,r.description,r.type,r.content,r.level,r.targetHint,r.rationale,r.status,r.commandId??null,r.createdAt,r.resolvedAt??null);
+    this.db.prepare('INSERT INTO command_suggestions ('+COLUMNS+') VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run(r.id,r.userId,r.clientId,r.clientName,r.name,r.description,r.type,r.content,r.level,r.targetHint,r.rationale,r.status,r.commandId??null,r.createdAt,r.resolvedAt??null,r.replacesCommandId??null,r.baseVersion??null);
   }
   get(userId:string,id:string):CommandSuggestionRecord|undefined{return this.map(this.db.prepare('SELECT '+COLUMNS+' FROM command_suggestions WHERE user_id=? AND id=?').get(userId,id));}
   /** Newest first. */
@@ -61,6 +64,6 @@ export class SqliteCommandSuggestionStore {
   private map=(r:any):CommandSuggestionRecord|undefined=>r?{
     id:r.id,userId:r.user_id,clientId:r.client_id,clientName:r.client_name,name:r.name,description:r.description,
     type:r.type==='bash_script'?'bash_script':'shell',content:r.content,level:r.level as CommandLevel,targetHint:r.target_hint,rationale:r.rationale,
-    status:r.status as SuggestionStatus,...(r.command_id?{commandId:r.command_id}:{}),createdAt:r.created_at,...(r.resolved_at!=null?{resolvedAt:r.resolved_at}:{}),
+    status:r.status as SuggestionStatus,...(r.command_id?{commandId:r.command_id}:{}),...(r.replaces_command_id?{replacesCommandId:r.replaces_command_id,baseVersion:r.base_version??1}:{}),createdAt:r.created_at,...(r.resolved_at!=null?{resolvedAt:r.resolved_at}:{}),
   }:undefined;
 }

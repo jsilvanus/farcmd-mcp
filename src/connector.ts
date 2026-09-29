@@ -17,16 +17,21 @@ import { executionLimits } from './limits.js';
 import { SqliteCommandSuggestionStore, MAX_PENDING_SUGGESTIONS, validateSuggestion, type CommandSuggestionRecord, type SuggestionInput, type SuggestionStatus } from './storage/command-suggestions.js';
 
 export interface ConnectorContext { userId:string; clientId:string; accessToken:string; }
-export interface CommandSummary { id:string; name:string; description:string; level:CommandLevel; enabled:boolean; confirmation:ConfirmationRequirement; }
+export interface CommandSummary { id:string; name:string; description:string; level:CommandLevel; enabled:boolean; confirmation:ConfirmationRequirement;
+  /** Goes up whenever what the command runs changes (content, type, target, level). */
+  version:number;
+  /** When that last happened (ISO 8601). */
+  changedAt:string; }
 export interface CommandExecution { ok:true; commandId:string; level:CommandLevel; exitCode:number|null; stdout:string; stderr:string; durationMs:number; signal?:string; truncated?:boolean; }
 const NEXT_STEP='Show approvalUrl to the person and wait until they say they have approved it. Then call this tool again with the same commandId to get the result. Passing confirmationToken is optional: it only identifies this request and is not a credential.';
 export interface PendingConfirmation {ok:true;pending:true;commandId:string;level:CommandLevel;confirmation:ConfirmationRequirement;approvalUrl:string;confirmationToken:string;expiresAt:number;
   /** Plain-language instructions for the model. */
   next:string;}
 const SUGGESTIONS_OFF='Command suggestions are not allowed for this OAuth source. The person can allow them for this client on the OAuth Sources page of the farcmd web UI.';
+const REVISION_NEXT='Show reviewUrl to the person. Nothing was changed: the command keeps running its current version. The person reviews the differences in the farcmd web UI and, if they accept, uninstalls the command, applies the new version and installs it again (or dismisses it). You cannot change, install, enable or run it yourself. Its version in list_commands goes up once the change is applied.';
 const SUGGESTION_NEXT='Show reviewUrl to the person. Nothing was created: the person reviews the suggestion in the farcmd web UI, picks the target and level, and creates, installs and enables the command there (or dismisses it). You cannot create, install, enable or run it yourself.';
 /** A suggestion as the MCP client sees it: its own fields and the review outcome, never anything else of the account. */
-export interface SuggestionSummary { id:string; name:string; level:CommandLevel; status:SuggestionStatus; createdAt:number; resolvedAt?:number; reviewUrl:string; }
+export interface SuggestionSummary { id:string; name:string; level:CommandLevel; replacesCommandId?:string; status:SuggestionStatus; createdAt:number; resolvedAt?:number; reviewUrl:string; }
 export interface SuggestionResult { ok:true; suggestionId:string; status:'pending'; reviewUrl:string; next:string; }
 export interface FarcmdConnector {
   /** Records a command suggestion for the person to review in the web UI. Creates, installs, enables and runs nothing. */
@@ -82,7 +87,7 @@ export class FarcmdConnectorImpl implements FarcmdConnector {
     this.access.assertAllowed(context.userId);
     const grant=this.activeGrant(context.userId,context.clientId);
     if(!grant)return [];
-    return this.commands.list(context.userId).filter(c=>c.enabled&&grant.visibleLevels.includes(c.level)).map(c=>({id:c.id,name:c.name,description:c.description,level:c.level,enabled:c.enabled,confirmation:confirmationForLevel(c.level)}));
+    return this.commands.list(context.userId).filter(c=>c.enabled&&grant.visibleLevels.includes(c.level)).map(c=>({id:c.id,name:c.name,description:c.description,level:c.level,enabled:c.enabled,confirmation:confirmationForLevel(c.level),version:c.version??1,changedAt:new Date(c.changedAt??c.updatedAt).toISOString()}));
   }
   suggestionsAllowed(context:ConnectorContext):boolean{return this.access.check(context.userId).allowed&&!!this.activeGrant(context.userId,context.clientId)?.allowSuggestions;}
   /** The grant, if this client may use the suggestion tools; otherwise throws the reason. */
@@ -97,19 +102,23 @@ export class FarcmdConnectorImpl implements FarcmdConnector {
   async suggestCommand(context:ConnectorContext,input:SuggestionInput):Promise<SuggestionResult>{
     const grant=this.suggestionGrant(context);
     const invalid=validateSuggestion(input); if(invalid)throw new Error('Invalid suggestion: '+invalid);
+    // A revision may only name a command this client can see in list_commands; anything else reads as not found.
+    const replaced=input.replacesCommandId?this.commands.get(context.userId,input.replacesCommandId):undefined;
+    if(input.replacesCommandId&&(!replaced||!replaced.enabled||!grant.visibleLevels.includes(replaced.level)))throw new Error('Command not found: replacesCommandId must be the id of a command from list_commands.');
     if(this.suggestions.countPending(context.userId)>=MAX_PENDING_SUGGESTIONS)throw new Error('There are already '+MAX_PENDING_SUGGESTIONS+' suggestions waiting for review. Ask the person to review or dismiss them in the farcmd web UI first.');
     this.grants.touch(context.userId,context.clientId);
     const record:CommandSuggestionRecord={id:randomUUID(),userId:context.userId,clientId:context.clientId,clientName:grant.clientName,
       name:input.name.trim(),description:input.description.trim(),type:input.type,content:input.type==='shell'?input.content.trim():input.content,
-      level:input.level,targetHint:input.targetHint.trim(),rationale:input.rationale.trim(),status:'pending',createdAt:Date.now()};
+      level:input.level,targetHint:input.targetHint.trim(),rationale:input.rationale.trim(),status:'pending',createdAt:Date.now(),
+      ...(replaced?{replacesCommandId:replaced.id,baseVersion:replaced.version??1}:{})};
     this.suggestions.create(record);
     this.auditLog.record({event:'command.suggested',actor:'mcp',outcome:'success',userId:context.userId,clientId:context.clientId,targetType:'command_suggestion',targetId:record.id,
-      details:{name:record.name,level:record.level,type:record.type,contentSha256:hashCommandContent(record.type,record.content)}});
-    return {ok:true,suggestionId:record.id,status:'pending',reviewUrl:this.suggestionReviewUrl(record.id),next:SUGGESTION_NEXT};
+      details:{name:record.name,level:record.level,type:record.type,contentSha256:hashCommandContent(record.type,record.content),...(replaced?{replacesCommandId:replaced.id,baseVersion:record.baseVersion}:{})}});
+    return {ok:true,suggestionId:record.id,status:'pending',reviewUrl:this.suggestionReviewUrl(record.id),next:replaced?REVISION_NEXT:SUGGESTION_NEXT};
   }
   async listSuggestions(context:ConnectorContext):Promise<SuggestionSummary[]>{
     this.suggestionGrant(context);
-    return this.suggestions.list(context.userId,undefined,context.clientId,50).map(s=>({id:s.id,name:s.name,level:s.level,status:s.status,createdAt:s.createdAt,...(s.resolvedAt!==undefined?{resolvedAt:s.resolvedAt}:{}),reviewUrl:this.suggestionReviewUrl(s.id)}));
+    return this.suggestions.list(context.userId,undefined,context.clientId,50).map(s=>({id:s.id,name:s.name,level:s.level,...(s.replacesCommandId?{replacesCommandId:s.replacesCommandId}:{}),status:s.status,createdAt:s.createdAt,...(s.resolvedAt!==undefined?{resolvedAt:s.resolvedAt}:{}),reviewUrl:this.suggestionReviewUrl(s.id)}));
   }
   async executeCommand(context:ConnectorContext,commandId:string,expectedLevel:CommandLevel,confirmationToken?:string):Promise<CommandExecution|PendingConfirmation>{
     try{

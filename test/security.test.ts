@@ -272,7 +272,7 @@ test('MCP discovery exposes command metadata only: no content, keys, verifier or
     f.db.prepare("INSERT INTO verification_authorities (id,user_id,target_id,username,privilege,encrypted_private_key,public_key,fingerprint,encrypted_secret,authorized_key_line,authorized_key_sha256,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)").run(randomUUID(),f.userId,targetId,'user','sudo','VERIFICATION-PRIVATE','ssh-ed25519 AAAA','fp','VERIFICATION-SECRET','line','sha','active',Date.now(),Date.now());
     new SqliteOAuthGrantStore(f.db).upsert(f.userId,'client','Client',[1,2,3,4,5],false);
     const listed=await new FarcmdConnectorImpl(f.db,'http://localhost:5999').listCommands({userId:f.userId,clientId:'client',accessToken:'t'});
-    assert.deepEqual(Object.keys(listed[0]!).sort(),['confirmation','description','enabled','id','level','name']);
+    assert.deepEqual(Object.keys(listed[0]!).sort(),['changedAt','confirmation','description','enabled','id','level','name','version']);
     const text=JSON.stringify(listed);
     for(const secret of ['systemctl','VERIFICATION','ssh-ed25519','sha256'])assert.ok(!text.includes(secret),secret);
     const { createMcpServer }=await import('../src/mcp/server.js');
