@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { loginRateLimit, verifyPassword } from '../login-rate-limit.js';
-import { isActiveUser, type AuthStore, type UserStore } from '../storage/interface.js';
+import { isActiveUser, type AuthStore, type McpUser, type UserStore } from '../storage/interface.js';
 import { fetchCimdMetadata, isCimdClientId } from './cimd.js';
 import { randomToken, verifyS256 } from './pkce.js';
 import { issueAccessToken } from './jwt.js';
@@ -9,39 +9,53 @@ import { contentSecurityPolicy, redirectSource } from '../csp.js';
 
 const LEVELS=[1,2,3,4,5] as const;
 
-function escapeHtml(value:string):string{return value.replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'","&#39;");}
-function page(title:string,body:string):string{return '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>'+escapeHtml(title)+'</title><style>body{font-family:system-ui,sans-serif;background:#f6f7f9;margin:0;padding:4rem 1rem}main{max-width:520px;margin:0 auto;background:#fff;padding:2rem;border-radius:12px;box-shadow:0 8px 30px rgba(0,0,0,.08)}h1{margin-top:0}label{display:block;margin:.9rem 0 .35rem}input{margin-right:.5rem}button{margin-top:1rem;padding:.7rem 1.1rem;border:0;border-radius:7px;cursor:pointer}.secondary{margin-left:.5rem;background:#eee}.error{color:#b00020}.level{padding:.7rem 0;border-top:1px solid #eee}.muted{color:#666;font-size:.9rem}</style></head><body><main>'+body+'</main></body></html>';}
+export function escapeHtml(value:string):string{return value.replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'","&#39;");}
+export function page(title:string,body:string):string{return '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>'+escapeHtml(title)+'</title><style>body{font-family:system-ui,sans-serif;background:#f6f7f9;margin:0;padding:4rem 1rem}main{max-width:520px;margin:0 auto;background:#fff;padding:2rem;border-radius:12px;box-shadow:0 8px 30px rgba(0,0,0,.08)}h1{margin-top:0}label{display:block;margin:.9rem 0 .35rem}input{margin-right:.5rem}button{margin-top:1rem;padding:.7rem 1.1rem;border:0;border-radius:7px;cursor:pointer}.secondary{margin-left:.5rem;background:#eee}.error{color:#b00020}.level{padding:.7rem 0;border-top:1px solid #eee}.muted{color:#666;font-size:.9rem}.sso{display:inline-block;padding:.7rem 1.1rem;border-radius:7px;background:#1f5eff;color:#fff;text-decoration:none}</style></head><body><main>'+body+'</main></body></html>';}
 function htmlError(reply:FastifyReply,status:number,title:string,heading:string){return reply.code(status).type('text/html').send(page(title,'<h1>'+heading+'</h1>'));}
-function loginPage(oauth:string,error?:string):string{return page('farcmd sign in','<h1>Sign in</h1><p>Sign in to authorize this MCP client.</p>'+(error?'<p class="error">'+escapeHtml(error)+'</p>':'')+'<form method="post" action="/oauth/authorize"><input type="hidden" name="oauth" value="'+escapeHtml(oauth)+'"><label for="email">Email</label><input id="email" name="email" type="email" autocomplete="username" required autofocus><label for="password">Password</label><input id="password" name="password" type="password" autocomplete="current-password" required><button type="submit">Sign in</button></form>');}
+/** The OIDC sign-in button (label = OIDC_BUTTON_LABEL); nothing when OIDC is off. */
+function oidcButton(oauth:string,oidcButtonLabel?:string):string{return oidcButtonLabel?'<p><a class="sso" href="/oidc/login?oauth='+encodeURIComponent(oauth)+'">'+escapeHtml(oidcButtonLabel)+'</a></p><p class="muted">or sign in with your farcmd password:</p>':'';}
+function loginPage(oauth:string,error?:string,oidcButtonLabel?:string):string{return page('farcmd sign in','<h1>Sign in</h1><p>Sign in to authorize this MCP client.</p>'+(error?'<p class="error">'+escapeHtml(error)+'</p>':'')+oidcButton(oauth,oidcButtonLabel)+'<form method="post" action="/oauth/authorize"><input type="hidden" name="oauth" value="'+escapeHtml(oauth)+'"><label for="email">Email</label><input id="email" name="email" type="email" autocomplete="username" required autofocus><label for="password">Password</label><input id="password" name="password" type="password" autocomplete="current-password" required><button type="submit">Sign in</button></form>');}
 function consentPage(session:string,userName:string,clientName:string,current:number[],permanent5:boolean,allowSuggestions:boolean):string{
  const descriptions=['Safe/read-only operations','Low-impact operations','Normal mutating operations','High-impact operations','Dangerous/destructive operations'];
  const levels=LEVELS.map(level=>'<div class="level"><label><input type="checkbox" name="level" value="'+level+'" '+(current.includes(level)?'checked':'')+' '+(level===5&&permanent5?'disabled':'')+'>Level '+level+' — '+descriptions[level-1]+'</label></div>').join('');
  return page('Authorize farcmd','<h1>Authorize farcmd</h1><p><strong>'+escapeHtml(clientName)+'</strong> wants access as <strong>'+escapeHtml(userName)+'</strong>.</p><p>Select which command levels this OAuth source should show to the MCP client.</p><form method="post" action="/oauth/authorize"><input type="hidden" name="session" value="'+escapeHtml(session)+'">'+levels+(permanent5?'<p class="muted">Level 5 has been permanently hidden from this OAuth client.</p>':'<div class="level"><label><input type="checkbox" name="permanentLevel5" value="yes"> Permanently hide level 5 from this OAuth source</label></div>')+'<div class="level"><label><input type="checkbox" name="allowSuggestions" value="yes"'+(allowSuggestions?' checked':'')+'> Allow this client to suggest new commands. You review them in the farcmd web UI; the client cannot create, install, enable or run them.</label></div>'+'<button type="submit" name="action" value="approve">Approve selected levels</button><button class="secondary" type="submit" name="action" value="deny">Deny</button></form>');
 }
-async function validateRequest(query:Record<string,string|undefined>){
+export async function validateRequest(query:Record<string,string|undefined>){
  if(query.response_type!=='code'||!query.client_id||!query.redirect_uri||!query.code_challenge||query.code_challenge_method!=='S256')throw new Error('Invalid OAuth request');
  if(!isCimdClientId(query.client_id))throw new Error('Invalid client_id');
  const metadata=await fetchCimdMetadata(query.client_id);
  if(!metadata.redirect_uris.includes(query.redirect_uri))throw new Error('Invalid redirect_uri');
  return metadata;
 }
-function encodeOAuth(query:Record<string,string|undefined>):string{return Buffer.from(new URLSearchParams(Object.entries(query).filter((entry):entry is [string,string]=>typeof entry[1]==='string')).toString()).toString('base64url');}
-function decodeOAuth(value:string):Record<string,string|undefined>{return Object.fromEntries(new URLSearchParams(Buffer.from(value,'base64url').toString('utf8')));}
+export function encodeOAuth(query:Record<string,string|undefined>):string{return Buffer.from(new URLSearchParams(Object.entries(query).filter((entry):entry is [string,string]=>typeof entry[1]==='string')).toString()).toString('base64url');}
+export function decodeOAuth(value:string):Record<string,string|undefined>{return Object.fromEntries(new URLSearchParams(Buffer.from(value,'base64url').toString('utf8')));}
 function selectedLevels(body:Record<string,string|undefined|string[]>):number[]{const raw=body.level;const values=Array.isArray(raw)?raw:(raw?[raw]:[]);return [...new Set(values.map(Number))].filter(v=>LEVELS.includes(v as any));}
 
-export async function mountAuthorizationServer(app:FastifyInstance,issuer:string,resource:string,secret:Uint8Array,authStore:AuthStore,users:UserStore):Promise<void>{
- app.get('/oauth/authorize',async(request,reply)=>{const q=request.query as Record<string,string|undefined>;try{await validateRequest(q);return reply.type('text/html').send(loginPage(encodeOAuth(q)));}catch{return htmlError(reply,400,'Invalid request','Invalid authorization request');}});
+/**
+ * The consent step after a successful sign-in (password or OIDC): a short-lived login session ties the consent form
+ * to this user and this authorization request.
+ */
+export function showConsent(reply:FastifyReply,authStore:AuthStore,user:McpUser,oauthValue:string,q:Record<string,string|undefined>,metadata:{client_name:string}){
+ const session=randomToken();authStore.oauthTokens().saveLoginSession(session,{userId:user.id,oauth:oauthValue,expires:Date.now()+5*60_000});const grant=authStore.getOAuthGrant(user.id,q.client_id!);const levels=grant?.visibleLevels??[1,2,3];
+ // The consent form's response redirects to the client, so form-action must allow its redirect_uri.
+ reply.header('Content-Security-Policy',contentSecurityPolicy([redirectSource(q.redirect_uri!)]));return reply.type('text/html').send(consentPage(session,user.name,metadata.client_name,levels,!!grant?.level5PermanentlyHidden,!!grant?.allowSuggestions));
+}
+
+export interface AuthorizationServerOptions { /** Shows the OIDC sign-in button on the sign-in page (OIDC_BUTTON_LABEL); omitted when OIDC is off. */ oidcButtonLabel?:string; }
+
+export async function mountAuthorizationServer(app:FastifyInstance,issuer:string,resource:string,secret:Uint8Array,authStore:AuthStore,users:UserStore,options:AuthorizationServerOptions={}):Promise<void>{
+ const signInPage=(oauth:string,error?:string)=>loginPage(oauth,error,options.oidcButtonLabel);
+ app.get('/oauth/authorize',async(request,reply)=>{const q=request.query as Record<string,string|undefined>;try{await validateRequest(q);return reply.type('text/html').send(signInPage(encodeOAuth(q)));}catch{return htmlError(reply,400,'Invalid request','Invalid authorization request');}});
  app.post('/oauth/authorize',async(request,reply)=>{
   const body=request.body as Record<string,string|undefined|string[]>;if(!body.oauth&&!body.session)return htmlError(reply,400,'Login required','Login required');
   let q:Record<string,string|undefined>;let oauthValue:string;let metadata:Awaited<ReturnType<typeof validateRequest>>;let userId:string;
   try{
    if(body.session){const session=authStore.oauthTokens().getLoginSession(String(body.session));if(!session||session.expires<Date.now())throw new Error('Expired login session');oauthValue=session.oauth;q=decodeOAuth(oauthValue);userId=session.userId;}
-   else{oauthValue=body.oauth as string;q=decodeOAuth(oauthValue);if(!body.email||!body.password)throw new Error('Login required');if(!loginRateLimit(request.ip)){authStore.recordSecurityEvent?.(undefined,q.client_id,'oauth.login',{reason:'rate limited',ip:request.ip},'failure');return reply.code(429).type('text/html').send(loginPage(body.oauth as string,'Too many sign-in attempts. Try again later.'));}const user=users.getUserByEmail(String(body.email).trim());if(!(await verifyPassword(user?.passwordHash,String(body.password)))||!user||!isActiveUser(user)){authStore.recordSecurityEvent?.(user?.id,q.client_id,'oauth.login',{email:String(body.email).slice(0,320),ip:request.ip},'failure');return reply.code(401).type('text/html').send(loginPage(body.oauth as string,'Invalid email or password.'));}userId=user.id;}
+   else{oauthValue=body.oauth as string;q=decodeOAuth(oauthValue);if(!body.email||!body.password)throw new Error('Login required');if(!loginRateLimit(request.ip)){authStore.recordSecurityEvent?.(undefined,q.client_id,'oauth.login',{reason:'rate limited',ip:request.ip},'failure');return reply.code(429).type('text/html').send(signInPage(body.oauth as string,'Too many sign-in attempts. Try again later.'));}const user=users.getUserByEmail(String(body.email).trim());if(!(await verifyPassword(user?.passwordHash,String(body.password)))||!user||!isActiveUser(user)){authStore.recordSecurityEvent?.(user?.id,q.client_id,'oauth.login',{email:String(body.email).slice(0,320),ip:request.ip},'failure');return reply.code(401).type('text/html').send(signInPage(body.oauth as string,'Invalid email or password.'));}userId=user.id;}
    metadata=await validateRequest(q);
   }catch{return htmlError(reply,400,'Invalid request','Invalid authorization request');}
   const user=users.getUser(userId);if(!isActiveUser(user))return htmlError(reply,401,'Invalid account','Invalid account');
-  if(body.action===undefined){const session=randomToken();authStore.oauthTokens().saveLoginSession(session,{userId:user.id,oauth:oauthValue,expires:Date.now()+5*60_000});const grant=authStore.getOAuthGrant(user.id,q.client_id!);const levels=grant?.visibleLevels??[1,2,3];// The consent form's response redirects to the client, so form-action must allow its redirect_uri.
-  reply.header('Content-Security-Policy',contentSecurityPolicy([redirectSource(q.redirect_uri!)]));return reply.type('text/html').send(consentPage(session,user.name,metadata.client_name,levels,!!grant?.level5PermanentlyHidden,!!grant?.allowSuggestions));}
+  if(body.action===undefined)return showConsent(reply,authStore,user,oauthValue,q,metadata);
   if(!body.session)return htmlError(reply,400,'Invalid session','Invalid authorization session');
   if(!authStore.oauthTokens().consumeLoginSession(String(body.session)))return htmlError(reply,400,'Expired session','Authorization session expired');
   const target=new URL(q.redirect_uri!);target.searchParams.set('iss',issuer);if(q.state)target.searchParams.set('state',q.state);

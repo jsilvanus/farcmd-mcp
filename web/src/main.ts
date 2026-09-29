@@ -38,9 +38,10 @@ function landing():[string,string?] {
 
 function render(page='commands', arg?:string) {
   if (!user) {
-    shell('Sign in', '<form id="login"><label>Email<input name="email" type="email" required autocomplete="username"></label><label>Password<input name="password" type="password" required autocomplete="current-password"></label><button>Sign in</button></form><p id="error"></p><p id="register-row" hidden><a href="#" id="register">Create an account</a></p><p id="register-closed" hidden><small>New accounts are created by the administrator.</small></p>');
+    shell('Sign in', '<p id="sso-row" hidden><a id="sso" class="button" href="/oidc/login"></a></p><form id="login"><label>Email<input name="email" type="email" required autocomplete="username"></label><label>Password<input name="password" type="password" required autocomplete="current-password"></label><button>Sign in</button></form><p id="error"></p><p id="register-row" hidden><a href="#" id="register">Create an account</a></p><p id="register-closed" hidden><small>New accounts are created by the administrator.</small></p>');
     // Self-service registration is shown only when the operator enabled it (farcmd-admin registration enable).
-    api('/api/auth/config').then(c=>{document.querySelector<HTMLElement>(c.registrationEnabled?'#register-row':'#register-closed')?.removeAttribute('hidden');}).catch(()=>undefined);
+    // The single sign-on button appears only when the server has OIDC configured (OIDC_ISSUER).
+    api('/api/auth/config').then(c=>{document.querySelector<HTMLElement>(c.registrationEnabled?'#register-row':'#register-closed')?.removeAttribute('hidden');if(c.oidc&&typeof c.oidc.label==='string'){const a=document.querySelector<HTMLAnchorElement>('#sso')!;a.textContent=c.oidc.label;document.querySelector<HTMLElement>('#sso-row')!.removeAttribute('hidden');}}).catch(()=>undefined);
     document.querySelector<HTMLFormElement>('#login')!.onsubmit = async e => {
       e.preventDefault();
       try { const f=new FormData(e.currentTarget as HTMLFormElement); const r=await api('/api/auth/login',{method:'POST',body:JSON.stringify({email:f.get('email'),password:f.get('password')})}); user=r.user; render(...landing()); }
