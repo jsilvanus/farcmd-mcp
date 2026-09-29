@@ -90,16 +90,19 @@ test('web UI: review a suggested command from its link, create it, dismiss anoth
     const command=db.prepare("SELECT id,target_id,level,content FROM commands WHERE name='saarnavideo: redeploy'").get() as any;
     assert.equal(command.target_id,prodId); assert.equal(command.level,4); assert.equal(command.content,redeploy.content);
     assert.equal(suggestions.get(user.id,redeploy.id)?.status,'accepted'); assert.equal(suggestions.get(user.id,redeploy.id)?.commandId,command.id);
-    // Versions and look-alike names are visible in the lists.
-    await page.locator('.row',{hasText:'cook_coffee'}).first().getByText(/^v1 · changed/).waitFor();
-    await page.locator('.row',{hasText:'cok_coffee'}).getByText('Name looks like "cook_coffee"').waitFor();
-    await page.locator('.row',{hasText:'cok_coffee'}).getByRole('button',{name:'Review',exact:true}).click();
+    // Versions and look-alike names are visible in the lists. Suggestion rows mention cook_coffee too, so look in the registry.
+    const registryRow=(name:string)=>page.locator('article',{has:page.getByRole('heading',{name:'Command registry'})}).locator('.row',{hasText:name});
+    const suggestionRow=(name:string)=>page.locator('article',{has:page.getByRole('heading',{name:/Suggested by MCP clients/})}).locator('.row',{hasText:name});
+    await registryRow('cook_coffee').getByText(/^v1 · changed/).waitFor();
+    await registryRow('cook_coffee').getByText('Name looks like suggestion "cok_coffee"').waitFor(); // and the other way round
+    await suggestionRow('cok_coffee').getByText('Name looks like "cook_coffee"').waitFor();
+    await suggestionRow('cok_coffee').getByRole('button',{name:'Review',exact:true}).click();
     await dialog.getByText('Looks like the existing command "cook_coffee".').waitFor();
     await dialog.locator('input[name=name]').fill('coffee_weak');
     assert.equal(await dialog.locator('.name-warning').count(),0,'the warning follows the name as it is edited');
     await dialog.getByRole('button',{name:'Cancel'}).click();
-    await page.locator('.row',{hasText:'cok_coffee'}).getByRole('button',{name:'Dismiss'}).click();
-    await page.locator('.row',{hasText:'cok_coffee'}).waitFor({state:'detached'});
+    await suggestionRow('cok_coffee').getByRole('button',{name:'Dismiss'}).click();
+    await suggestionRow('cok_coffee').waitFor({state:'detached'});
     // A suggested change to an existing command: warnings, diff, then approve -> uninstall -> promote -> install.
     const changeRow=page.locator('.row',{hasText:'Changes existing command: cook_coffee'});
     await changeRow.getByRole('button',{name:'Review change'}).click();
@@ -119,12 +122,12 @@ test('web UI: review a suggested command from its link, create it, dismiss anoth
     assert.equal(await promote.isDisabled(),true,'the approval checkbox is required too');
     await dialog.getByLabel(/I have read every change and approve replacing version 1/).check();
     await promote.click(); await dialog.getByText('✓ Now version 2').waitFor();
-    assert.equal(await dialog.getByRole('button',{name:'Install'}).isDisabled(),false,'next step: install');
+    assert.equal(await dialog.getByRole('button',{name:'Install',exact:true}).isDisabled(),false,'next step: install');
     const coffee=db.prepare('SELECT version,level,content,name FROM commands WHERE id=?').get(coffeeId) as any;
     assert.equal(coffee.version,2); assert.equal(coffee.level,2); assert.equal(coffee.content,change.content); assert.equal(coffee.name,'cook_coffee');
     assert.equal(suggestions.get(user.id,change.id)?.status,'accepted');
     await dialog.getByRole('button',{name:'Close'}).click(); await dialog.waitFor({state:'detached'});
-    await page.locator('.row',{hasText:'cook_coffee'}).first().getByText(/^v2 · changed/).waitFor();
+    await registryRow('cook_coffee').getByText(/^v2 · changed/).waitFor();
     // Without a usable clipboard (e.g. plain HTTP) the text is shown to copy by hand.
     await page.evaluate(()=>{navigator.clipboard.writeText=()=>Promise.reject(new Error('denied'));});
     await page.locator('.row',{hasText:'wipe everything'}).getByRole('button',{name:'Copy for review'}).click();
