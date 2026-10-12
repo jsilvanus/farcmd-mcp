@@ -42,7 +42,7 @@ export function productionConfigProblems(env:NodeJS.ProcessEnv):string[]{
   let url:URL|undefined;
   try{url=new URL(env.MCP_PUBLIC_URL??'');}catch{problems.push('MCP_PUBLIC_URL must be set to the public https:// URL of this server.');}
   if(url&&url.protocol!=='https:')problems.push('MCP_PUBLIC_URL must use https:// in production (OAuth and secure cookies require TLS; terminate it at the reverse proxy).');
-  if(url&&(url.pathname!=='/'||url.search||url.hash))problems.push('MCP_PUBLIC_URL must be an origin without a path (e.g. https://farcmd.example.org).');
+  if(url&&(url.search||url.hash||!/^(\/[A-Za-z0-9._~-]+)*\/?$/.test(url.pathname)))problems.push('MCP_PUBLIC_URL must be an origin, optionally with a path (e.g. https://farcmd.example.org or https://example.org/farcmd), without a query or fragment.');
   if(env.MCP_DEFAULT_USER_PASSWORD)problems.push('MCP_DEFAULT_USER_PASSWORD is a development bootstrap; create users with farcmd-admin in production.');
   return problems;
 }
