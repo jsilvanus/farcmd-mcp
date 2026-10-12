@@ -12,11 +12,15 @@ async function api(path:string, init:RequestInit={}) {
   const headers = new Headers(init.headers);
   if (init.body && !headers.has('content-type')) headers.set('content-type','application/json');
   headers.set('x-farcmd-request','1'); // required by the server on state-changing calls (CSRF defence)
-  const response = await fetch(path, {...init, headers, credentials:'same-origin'});
+  // Relative, so it resolves against <base>: the API sits under the public base path too.
+  const response = await fetch(path.replace(/^\//,''), {...init, headers, credentials:'same-origin'});
   const data = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(data.error ?? 'Request failed');
   return data;
 }
+
+/** The MCP endpoint, next to this page (which sits at the public base path). */
+function mcpUrl() { return new URL('mcp', document.baseURI).href; }
 
 function escapeHtml(s:string) {
   return s.replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'","&#39;");
@@ -38,7 +42,7 @@ function landing():[string,string?] {
 
 function render(page='commands', arg?:string) {
   if (!user) {
-    shell('Sign in', '<p id="sso-row" hidden><a id="sso" class="button" href="/oidc/login"></a></p><form id="login"><label>Email<input name="email" type="email" required autocomplete="username"></label><label>Password<input name="password" type="password" required autocomplete="current-password"></label><button>Sign in</button></form><p id="error"></p><p id="register-row" hidden><a href="#" id="register">Create an account</a></p><p id="register-closed" hidden><small>New accounts are created by the administrator.</small></p>');
+    shell('Sign in', '<p id="sso-row" hidden><a id="sso" class="button" href="oidc/login"></a></p><form id="login"><label>Email<input name="email" type="email" required autocomplete="username"></label><label>Password<input name="password" type="password" required autocomplete="current-password"></label><button>Sign in</button></form><p id="error"></p><p id="register-row" hidden><a href="#" id="register">Create an account</a></p><p id="register-closed" hidden><small>New accounts are created by the administrator.</small></p>');
     // Self-service registration is shown only when the operator enabled it (farcmd-admin registration enable).
     // The single sign-on button appears only when the server has OIDC configured (OIDC_ISSUER).
     api('/api/auth/config').then(c=>{document.querySelector<HTMLElement>(c.registrationEnabled?'#register-row':'#register-closed')?.removeAttribute('hidden');if(c.oidc&&typeof c.oidc.label==='string'){const a=document.querySelector<HTMLAnchorElement>('#sso')!;a.textContent=c.oidc.label;document.querySelector<HTMLElement>('#sso-row')!.removeAttribute('hidden');}}).catch(()=>undefined);
@@ -137,7 +141,7 @@ function setupChecklist(keys:any[],targets:any[],commands:any[],grants:any[]):st
     installed.length?['done','Create and install commands',installed.length+' of '+commands.length+' installed. Manage them on the <a href="#" data-page="commands">Commands page</a>.']
       :['todo','Create and install commands','On the <a href="#" data-page="commands">Commands page</a>: New command, then Install.'],
     grants.length?['done','Connect an MCP client',grants.length+' client'+(grants.length===1?'':'s')+' authorized (see <a href="#" data-page="oauth">OAuth Sources page</a>).']
-      :['todo','Connect an MCP client','Add '+escapeHtml(location.origin+'/mcp')+' as a remote MCP server in your client and approve it here.'],
+      :['todo','Connect an MCP client','Add '+escapeHtml(mcpUrl())+' as a remote MCP server in your client and approve it here.'],
     keys.length&&installed.length?['info','Delete the master key when you are done','Recommended: installed commands keep running without it.']
       :keys.length?['info','Delete the master key when you are done','Recommended once your commands are installed.']:['done','Delete the master key when you are done','No master key is stored.'],
   ];
@@ -367,7 +371,7 @@ async function oauthPage(){
     '</li>';
   shell('OAuth Sources','<div id="mcp-access"></div><article>'+sectionHead('Authorized MCP clients','')+
     '<p class="hint">Each client sees only the command levels ticked here. Whether it asks before a call is the client\'s own setting; levels 4 and 5 always need your approval in farcmd as well.</p>'+
-    (grants.length?'<ul class="rows grants">'+grants.map(grantRow).join('')+'</ul>':'<p class="empty">No MCP clients yet. Add '+escapeHtml(location.origin+'/mcp')+' as a remote MCP server in your client, then approve it when it opens the sign-in page.</p>')+'</article>');
+    (grants.length?'<ul class="rows grants">'+grants.map(grantRow).join('')+'</ul>':'<p class="empty">No MCP clients yet. Add '+escapeHtml(mcpUrl())+' as a remote MCP server in your client, then approve it when it opens the sign-in page.</p>')+'</article>');
   document.querySelectorAll<HTMLFormElement>('[data-oauth-form]').forEach(f=>{
     const permanent=f.querySelector<HTMLInputElement>('input[name="permanentLevel5"]')!; const level5=f.querySelector<HTMLInputElement>('input[name="level"][value="5"]')!;
     permanent.addEventListener('change',()=>{if(permanent.checked){level5.checked=false;}level5.disabled=permanent.checked;});

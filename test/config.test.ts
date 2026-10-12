@@ -30,6 +30,9 @@ test('production refuses unsafe configuration',()=>{
   assert.deepEqual(productionConfigProblems({NODE_ENV:'production',MCP_PUBLIC_URL:'https://farcmd.example.org'}),[]);
   assert.match(productionConfigProblems({NODE_ENV:'production'}).join(),/must be set/);
   assert.match(productionConfigProblems({NODE_ENV:'production',MCP_PUBLIC_URL:'http://farcmd.example.org'}).join(),/https/);
-  assert.match(productionConfigProblems({NODE_ENV:'production',MCP_PUBLIC_URL:'https://example.org/farcmd'}).join(),/without a path/);
+  assert.deepEqual(productionConfigProblems({NODE_ENV:'production',MCP_PUBLIC_URL:'https://example.org/farcmd'}),[]);
+  assert.deepEqual(productionConfigProblems({NODE_ENV:'production',MCP_PUBLIC_URL:'https://example.org/farcmd/'}),[]);
+  assert.match(productionConfigProblems({NODE_ENV:'production',MCP_PUBLIC_URL:'https://example.org/farcmd?x=1'}).join(),/without a query/);
+  assert.match(productionConfigProblems({NODE_ENV:'production',MCP_PUBLIC_URL:'https://example.org/far%20cmd'}).join(),/without a query/);
   assert.match(productionConfigProblems({NODE_ENV:'production',MCP_PUBLIC_URL:'https://farcmd.example.org',MCP_DEFAULT_USER_PASSWORD:'x'}).join(),/farcmd-admin/);
 });
