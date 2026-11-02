@@ -4,6 +4,7 @@ import formbody from '@fastify/formbody';
 import cookie from '@fastify/cookie';
 import fastifyStatic from '@fastify/static';
 import { fileURLToPath } from 'node:url';
+import { readFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { FarcmdConnectorImpl } from './connector.js';
 import { mountMcpHttp } from './mcp/http.js';
@@ -22,13 +23,15 @@ import { hashPassword } from './login-rate-limit.js';
 import { VERSION } from './version.js';
 import { OidcRelyingParty, oidcSettings } from './oidc.js';
 import { mountOidc } from './oidc-routes.js';
+import { basePathOf, normalizePublicUrl, rewriteUrlFor } from './base-path.js';
 
 const problems=productionConfigProblems(process.env);
 const oidc=oidcSettings(process.env); // validates OIDC_* at startup; undefined when OIDC_ISSUER is unset
 if(problems.length)throw new Error('Refusing to start with an unsafe production configuration:\n- '+problems.join('\n- '));
 executionLimits(); // validates FARCMD_SSH_MAX_* and FARCMD_MCP_EXECUTIONS_PER_MINUTE at startup
 const port=Number(process.env.PORT??'5999');
-const publicUrl=process.env.MCP_PUBLIC_URL??('http://localhost:'+port);
+const publicUrl=normalizePublicUrl(process.env.MCP_PUBLIC_URL??('http://localhost:'+port));
+const basePath=basePathOf(publicUrl); // '' at the root; '/farcmd-mcp' when served under a sub-path
 const secretText=process.env.JWT_SECRET;
 const defaultUserPassword=process.env.MCP_DEFAULT_USER_PASSWORD;
 masterKey(); // validates FARCMD_ENCRYPTION_KEY at startup
@@ -47,7 +50,8 @@ if(retentionMs>0){store.cleanupSecurityEvents(retentionMs);setInterval(()=>store
 // Execution history retention (FARCMD_EXECUTION_RETENTION_DAYS, default 365, 0 = keep forever): runs and their output, pruned at start and daily.
 const executionRetention=executionRetentionMs();
 if(executionRetention>0){const history=new SqliteExecutionHistoryStore(store.getDatabase());history.prune(executionRetention);setInterval(()=>history.prune(executionRetention),86_400_000).unref();}
-const options:FastifyHttpOptions<Server>={logger:true,bodyLimit:256*1024,trustProxy:parseTrustProxy(process.env.FARCMD_TRUST_PROXY)};
+const rewrite=rewriteUrlFor(basePath);
+const options:FastifyHttpOptions<Server>={logger:true,bodyLimit:256*1024,trustProxy:parseTrustProxy(process.env.FARCMD_TRUST_PROXY),...(basePath?{rewriteUrl:req=>rewrite(req.url??'/')}:{})};
 const app=Fastify(options);
 const production=process.env.NODE_ENV==='production';
 const defaultCsp=contentSecurityPolicy();
@@ -60,5 +64,7 @@ await mountAuthorizationServer(app,publicUrl,publicUrl+'/mcp',secret,store,users
 if(oidc)await mountOidc(app,new OidcRelyingParty(oidc,publicUrl+'/oidc/callback',store.getDatabase()),users,store,publicUrl);
 await mountMcpHttp(app,{connector:new FarcmdConnectorImpl(store.getDatabase(),publicUrl),publicUrl,jwtSecret:secret,resource:publicUrl+'/mcp',isUserActive:id=>isActiveUser(users.getUser(id))});
 app.get('/health',{logLevel:'silent'},async()=>({ok:true}));
-app.get('/',async(_request,reply)=>{if(production)return reply.sendFile('index.html');return {name:'farcmd-mcp',version:VERSION,mcp:'/mcp',web:'/'};});
+// The built web UI uses relative URLs; <base> anchors them at the public base path (also when opened without the trailing slash).
+const indexHtml=production?readFileSync(fileURLToPath(new URL('./web/index.html',import.meta.url)),'utf8').replace('<head>','<head><base href="'+basePath+'/">'):'';
+app.get('/',async(_request,reply)=>{if(production)return reply.type('text/html').send(indexHtml);return {name:'farcmd-mcp',version:VERSION,mcp:basePath+'/mcp',web:basePath+'/'};});
 await app.listen({host:process.env.HOST??'0.0.0.0',port});

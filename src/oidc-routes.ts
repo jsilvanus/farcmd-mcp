@@ -7,11 +7,12 @@ import { OIDC_STATE_LIFETIME_MS, OidcError, type OidcPurpose, type OidcRelyingPa
 import { isActiveUser, type AuthStore, type UserStore, type WebSessionStore } from './storage/interface.js';
 import { WebSessionService } from './web-session.js';
 import { webSessionCookieOptions } from './web-api.js';
+import { basePath, basePathOf, cookiePath } from './base-path.js';
 
 const STATE_COOKIE='farcmd_oidc';
 
 function errorPage(reply:FastifyReply,status:number,message:string,purpose?:OidcPurpose){
-  const next=purpose?.kind==='oauth'?'<p>Start the connection again from your MCP client.</p>':'<p><a href="/">Back to sign in</a></p>';
+  const next=purpose?.kind==='oauth'?'<p>Start the connection again from your MCP client.</p>':'<p><a href="'+basePath()+'/">Back to sign in</a></p>';
   return reply.code(status).type('text/html').send(page('Sign-in failed','<h1>Sign-in failed</h1><p class="error">'+escapeHtml(message)+'</p>'+next));
 }
 
@@ -38,15 +39,16 @@ export async function mountOidc(app:FastifyInstance,rp:OidcRelyingParty,users:Us
     let started:{url:URL;state:string};
     try{started=await rp.start(purpose);}
     catch(error){request.log.warn({err:error instanceof Error?error.message:String(error)},'OIDC provider unavailable');return errorPage(reply,503,'The sign-in service cannot be reached right now. Try again later.',purpose);}
-    reply.setCookie(STATE_COOKIE,started.state,{httpOnly:true,secure:production,sameSite:'lax',path:'/oidc',maxAge:OIDC_STATE_LIFETIME_MS/1000});
+    reply.setCookie(STATE_COOKIE,started.state,{httpOnly:true,secure:production,sameSite:'lax',path:cookiePath('/oidc'),maxAge:OIDC_STATE_LIFETIME_MS/1000});
     return reply.redirect(started.url.toString());
   });
 
   app.get('/oidc/callback',async(request,reply)=>{
     const cookieState=request.cookies?.[STATE_COOKIE];
-    reply.clearCookie(STATE_COOKIE,{path:'/oidc'});
-    // The provider redirected to <publicUrl>/oidc/callback; rebuild that URL (the app may sit behind a proxy).
-    const callbackUrl=new URL(request.url,publicUrl);
+    reply.clearCookie(STATE_COOKIE,{path:cookiePath('/oidc')});
+    // The provider redirected to <publicUrl>/oidc/callback; rebuild that URL (the app may sit behind a proxy,
+    // and request.url has the base path already stripped).
+    const callbackUrl=new URL(publicUrl+request.url);
     let result:Awaited<ReturnType<OidcRelyingParty['finish']>>;
     try{result=await rp.finish(callbackUrl,cookieState);}
     catch(error){
@@ -70,7 +72,7 @@ export async function mountOidc(app:FastifyInstance,rp:OidcRelyingParty,users:Us
     if(purpose.kind==='web'){
       audit.record({event:'auth.oidc_login',actor:'web',outcome:'success',userId:user.id,ip:request.ip,targetType:'user',targetId:user.id,details:{linked:resolved.linked}});
       reply.setCookie('farcmd_session',sessions.create(user.id),webSessionCookieOptions());
-      return reply.redirect('/');
+      return reply.redirect(basePathOf(publicUrl)+'/');
     }
     const q=decodeOAuth(purpose.oauth);
     let metadata:Awaited<ReturnType<typeof validateRequest>>;

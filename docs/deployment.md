@@ -20,7 +20,7 @@ openssl rand -base64 32   # JWT_SECRET — signs OAuth access tokens
 
 | Variable | Required | Meaning |
 |---|---|---|
-| `MCP_PUBLIC_URL` | yes | Public origin, e.g. `https://farcmd.example.org` (no path). Must be `https://` in production; used as OAuth issuer, MCP resource and allowed web Origin. |
+| `MCP_PUBLIC_URL` | yes | Public URL, e.g. `https://farcmd.example.org`, or `https://example.org/farcmd` under a sub-path (see below). Must be `https://` in production; used as OAuth issuer, MCP resource and allowed web Origin. |
 | `FARCMD_ENCRYPTION_KEY` | yes | Base64, exactly 32 bytes. **Losing it makes stored SSH credentials and the audit chain unusable.** |
 | `JWT_SECRET` | yes | Base64, at least 32 bytes. Changing it invalidates issued access tokens (clients refresh). |
 | `NODE_ENV` | `production` | Enables the static web UI, HSTS/CSP and the startup safety checks. Set by the Docker image. |
@@ -41,7 +41,7 @@ openssl rand -base64 32   # JWT_SECRET — signs OAuth access tokens
 | `OIDC_TRUST_EMAIL` | – | `true` links by email even when the provider does not mark it verified (default `false`). |
 
 In production the server refuses to start with a missing or non-`https` `MCP_PUBLIC_URL`, with a
-URL that has a path, or with the development bootstrap `MCP_DEFAULT_USER_PASSWORD` set.
+URL that has a query or fragment, or with the development bootstrap `MCP_DEFAULT_USER_PASSWORD` set.
 
 ## 2. Docker (recommended)
 
@@ -98,6 +98,32 @@ Run it with `docker compose -f docker-compose.traefik.yml ...` (or set
 
 Never set `FARCMD_TRUST_PROXY=true` if the app port is reachable other than through the proxy:
 anyone could then forge their client IP.
+
+### Under a sub-path
+
+farcmd can share a host with other apps: set `MCP_PUBLIC_URL=https://example.org/farcmd`. The web UI
+is then at `https://example.org/farcmd/`, the MCP endpoint at `https://example.org/farcmd/mcp`, and
+the session cookie is scoped to `/farcmd`. Forward the prefixed paths to farcmd **as they are** (do
+not strip the prefix; farcmd strips it itself and still answers unprefixed requests, e.g. its own
+`/health`).
+
+OAuth discovery for an issuer with a path lives at the host root, with the path appended (RFC 8414,
+RFC 9728), so route these to farcmd as well:
+
+- `/farcmd` and everything under `/farcmd/`
+- `/.well-known/oauth-authorization-server/farcmd`
+- `/.well-known/openid-configuration/farcmd`
+- `/.well-known/oauth-protected-resource/farcmd` and everything under it (the MCP resource's metadata is
+  at `/.well-known/oauth-protected-resource/farcmd/mcp`)
+
+With Traefik:
+
+```yaml
+- "traefik.http.routers.farcmd.rule=Host(`example.org`) && (Path(`/farcmd`) || PathPrefix(`/farcmd/`) || Path(`/.well-known/oauth-authorization-server/farcmd`) || Path(`/.well-known/openid-configuration/farcmd`) || Path(`/.well-known/oauth-protected-resource/farcmd`) || PathPrefix(`/.well-known/oauth-protected-resource/farcmd/`))"
+```
+
+The bare `/.well-known/...` documents of the host stay free for other apps. With single sign-on, the
+provider's redirect URI is `https://example.org/farcmd/oidc/callback`.
 
 ## 3. Without Docker
 

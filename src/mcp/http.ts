@@ -7,6 +7,7 @@ import { createMcpServer } from './server.js';
 import type { FarcmdConnector } from '../connector.js';
 import { verifyAccessToken } from '../oauth/jwt.js';
 import { deliverElicitationResponse, rememberClientCapabilities } from './elicitation.js';
+import { wellKnownUrl } from '../base-path.js';
 
 export interface McpHttpOptions {
   connector: FarcmdConnector;
@@ -25,7 +26,7 @@ export async function mountMcpHttp(app: FastifyInstance, options: McpHttpOptions
     // MCP authorization: requests without a valid access token get 401 and a challenge that points to
     // the protected resource metadata, which is how clients (e.g. ChatGPT) discover and confirm OAuth.
     const challenge = (error?: string) => reply.code(401).header('WWW-Authenticate',
-      'Bearer resource_metadata="' + options.publicUrl + '/.well-known/oauth-protected-resource/mcp", scope="mcp"' +
+      'Bearer resource_metadata="' + wellKnownUrl(options.publicUrl, 'oauth-protected-resource', '/mcp') + '", scope="mcp"' +
       (error ? ', error="' + error + '", error_description="The access token is missing, expired or invalid."' : '')).send({error: error ?? 'unauthorized'});
     if (!header?.startsWith('Bearer ')) return challenge();
     try {

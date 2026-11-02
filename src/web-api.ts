@@ -28,6 +28,7 @@ import { isCommandLevel } from './command-levels.js';
 import { AuditLog, type AuditOutcome } from './audit.js';
 import { hashToken } from './oauth/tokens.js';
 import { EMAIL_PATTERN, MAX_EMAIL_LENGTH, normalizeEmail, passwordLengthOk } from './user-admin.js';
+import { cookiePath } from './base-path.js';
 
 const confirmationAttempts=new Map<string,{count:number;reset:number}>();
 function confirmationRateLimit(key:string):boolean{return rateLimit(key,5,15*60_000,confirmationAttempts);}
@@ -35,7 +36,7 @@ function publicUser(user:{id:string;name:string;email?:string;createdAt:number})
   return {id:user.id,name:user.name,email:user.email,createdAt:user.createdAt};
 }
 export function webSessionCookieOptions() {
-  return {httpOnly:true,secure:process.env.NODE_ENV==='production',sameSite:'lax' as const,path:'/',maxAge:WEB_SESSION_LIFETIME_MS/1000};
+  return {httpOnly:true,secure:process.env.NODE_ENV==='production',sameSite:'lax' as const,path:cookiePath(),maxAge:WEB_SESSION_LIFETIME_MS/1000};
 }
 /** Header the web UI sends on every API call. A cross-site page cannot set it without a CORS preflight, which farcmd never grants. */
 export const CSRF_HEADER='x-farcmd-request';
@@ -120,7 +121,7 @@ export async function mountWebApi(app:FastifyInstance, users:UserStore, sessionS
     const session=request.webSession;
     if(!session)return reply.code(401).send({error:'Authentication required'});
     const user=users.getUser(session.userId);
-    if(!isActiveUser(user)){sessions.delete(session.token);reply.clearCookie('farcmd_session',{path:'/'});return reply.code(401).send({error:user?'This account is disabled.':'Authentication required'});}
+    if(!isActiveUser(user)){sessions.delete(session.token);reply.clearCookie('farcmd_session',{path:cookiePath()});return reply.code(401).send({error:user?'This account is disabled.':'Authentication required'});}
     request.user=user;
   });
   app.addHook('onSend',async(request,reply,payload)=>{
@@ -379,7 +380,7 @@ export async function mountWebApi(app:FastifyInstance, users:UserStore, sessionS
   });
   app.post('/api/auth/logout',async (request,reply)=>{
     const token=request.cookies.farcmd_session; if(token)sessions.delete(token);
-    reply.clearCookie('farcmd_session',{path:'/'});
+    reply.clearCookie('farcmd_session',{path:cookiePath()});
     return {ok:true};
   });
   app.post('/api/auth/register',async (request,reply)=>{

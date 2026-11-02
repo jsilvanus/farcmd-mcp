@@ -178,7 +178,7 @@ Run it under systemd (or similar) as a dedicated unprivileged user, and make `.e
 
 | Variable | Required | Meaning |
 |---|---|---|
-| `MCP_PUBLIC_URL` | yes | Public origin, e.g. `https://farcmd.example.org` (no path). Used as the OAuth issuer, the MCP resource and the allowed web Origin. |
+| `MCP_PUBLIC_URL` | yes | Public URL, e.g. `https://farcmd.example.org`, or with a path to share a host: `https://example.org/farcmd` (see [Under a sub-path](docs/deployment.md#under-a-sub-path)). Used as the OAuth issuer, the MCP resource and the allowed web Origin. |
 | `FARCMD_ENCRYPTION_KEY` | yes | Base64, exactly 32 bytes. |
 | `JWT_SECRET` | yes | Base64, at least 32 bytes. |
 | `NODE_ENV` | `production` | Serves the web UI, sends HSTS/CSP and turns on the startup safety checks. Set by the image. |
@@ -199,7 +199,7 @@ Run it under systemd (or similar) as a dedicated unprivileged user, and make `.e
 | `OIDC_CREATE_USERS` | – | `true` creates a farcmd account for a provider user who has none (default `false`: accounts are linked, not created). |
 | `OIDC_TRUST_EMAIL` | – | `true` links by email even when the provider does not mark it verified (default `false`). |
 
-In production, farcmd refuses to start when `MCP_PUBLIC_URL` is missing, not `https://` or has a path, or when the development bootstrap `MCP_DEFAULT_USER_PASSWORD` is set.
+In production, farcmd refuses to start when `MCP_PUBLIC_URL` is missing, not `https://` or has a query or fragment, or when the development bootstrap `MCP_DEFAULT_USER_PASSWORD` is set.
 
 ### Single sign-on (OIDC)
 
